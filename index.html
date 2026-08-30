@@ -1,0 +1,40 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Treino">
+<meta name="theme-color" content="#0d0f13">
+<title>Treino</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="styles.css">
+
+<main>
+  <section id="tela-inicio" class="tela ativa"></section>
+  <section id="tela-exec" class="tela"></section>
+  <section id="tela-fichas" class="tela"></section>
+  <section id="tela-historico" class="tela"></section>
+  <section id="tela-progresso" class="tela"></section>
+  <section id="tela-config" class="tela"></section>
+</main>
+
+<div id="barra-exec" class="barra-fixa" hidden>
+  <div class="interno"><button id="btn-finalizar" class="primario largo">Finalizar treino</button></div>
+</div>
+
+<nav>
+  <button data-tela="inicio"><span class="ic">▲</span>Início</button>
+  <button data-tela="fichas"><span class="ic">▤</span>Fichas</button>
+  <button data-tela="historico"><span class="ic">◷</span>Histórico</button>
+  <button data-tela="progresso"><span class="ic">◲</span>Progresso</button>
+  <button data-tela="config"><span class="ic">⚙</span>Ajustes</button>
+</nav>
+
+<div id="modal-fundo" class="modal-fundo oculto"><div class="modal" id="modal"></div></div>
+<div id="toast" class="toast"></div>
+
+<script src="seed.js"></script>
+<script src="db.js"></script>
+<script src="app.js"></script>
