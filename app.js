@@ -28,6 +28,13 @@ function diasEntre(a, b) {
 }
 function hojeISO() { return iso(new Date()); }
 
+function diasDesde(dataISO) {
+  const d = diasEntre(dataISO, hojeISO());
+  if (d <= 0) return 'hoje';
+  if (d === 1) return '1 dia';
+  return d + ' dias';
+}
+
 function toast(msg) {
   const t = $('#toast');
   t.textContent = msg;
@@ -38,6 +45,48 @@ function toast(msg) {
 
 function ex(id) { return estado.exercicios.find(e => e.id === id) || { id, nome: id, grupos: [] }; }
 function ficha(id) { return estado.fichas.find(f => f.id === id); }
+
+/* ================== sequência cíclica ================== */
+
+function fichasOrdenadas() {
+  return estado.fichas.slice().sort((a, b) => (a.ordem || 99) - (b.ordem || 99));
+}
+
+/* sessões da mais recente para a mais antiga (desempate: ordem de registro) */
+function sessoesRecentes() {
+  return estado.sessoes
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => (a.s.data === b.s.data ? b.i - a.i : (a.s.data < b.s.data ? 1 : -1)))
+    .map(x => x.s);
+}
+
+function ultimaSessao() { return sessoesRecentes()[0] || null; }
+
+/* próximo treino da sequência, a partir do último registrado */
+function proximaFicha() {
+  const ord = fichasOrdenadas();
+  if (!ord.length) return null;
+  const ult = ultimaSessao();
+  if (!ult) return ord[0];
+  const idx = ord.findIndex(f => f.id === ult.fichaId);
+  if (idx < 0) return ord[0];
+  return ord[(idx + 1) % ord.length];
+}
+
+/* séries do ciclo corrente: os últimos N treinos distintos da sequência */
+function seriesDoCiclo() {
+  const ord = fichasOrdenadas();
+  const n = ord.length || 5;
+  const vistos = new Set();
+  const sessoes = [];
+  for (const s of sessoesRecentes()) {
+    if (vistos.has(s.fichaId)) break;   // completou uma volta
+    vistos.add(s.fichaId);
+    sessoes.push(s);
+    if (sessoes.length >= n) break;
+  }
+  return sessoes;
+}
 
 /* ================== bloco de 8 semanas ================== */
 
@@ -62,7 +111,14 @@ function textoPresc(item) {
   const un = e.unidade === 'seg' ? 's' : '';
   const faixa = item.repMin === item.repMax ? item.repMin + un : `${item.repMin}-${item.repMax}${un}`;
   let t = `${item.series}x${faixa}`;
-  if (item.rirMin != null) t += ' · RIR ' + (item.rirMin === item.rirMax ? item.rirMin : `${item.rirMin}-${item.rirMax}`);
+  if (item.excecao) t += ' (*)';
+  if (item.rirMin != null && item.rirMax != null) {
+    t += ' · RIR ' + (item.rirMin === item.rirMax ? item.rirMin : `${item.rirMin}-${item.rirMax}`);
+  } else if (item.ativacao) {
+    t += ' · leve';
+  } else {
+    t += ' · RIR ' + (item.rirMax ?? 1) + ', última até a falha';
+  }
   return t;
 }
 
@@ -126,17 +182,26 @@ function render() {
 
 function renderInicio() {
   const hoje = new Date();
-  const diaSemana = hoje.getDay() === 0 ? 7 : hoje.getDay();
   const sem = semanaBloco();
   const fase = faseBloco(sem);
-  const doDia = estado.fichas.find(f => f.dia === diaSemana);
+  const prox = proximaFicha();
   const ativa = estado.sessaoAtiva;
+  const ord = fichasOrdenadas();
 
   let h = `<div class="topo">
     <div><h1>${DIAS[hoje.getDay()]}</h1>
     <div class="sub">${dataBRLonga(hojeISO())}</div></div>
     <span class="tag ${fase.classe}">${fase.rotulo}</span>
   </div>`;
+
+  if (migracao) {
+    h += `<div class="aviso" style="background:var(--acento-esc);color:var(--acento)">
+      <span>✓</span><span>Ficha atualizada para a versão ${migracao.para}. ${
+        migracao.sessoes === 0 ? 'Nenhum treino havia sido registrado.'
+        : migracao.sessoes === 1 ? 'Seu treino já registrado foi preservado.'
+        : `Seus ${migracao.sessoes} treinos já registrados foram preservados.`
+      }${migracao.descartouSessaoAtiva ? ' O treino que estava em andamento foi descartado, porque a ficha mudou.' : ''}</span></div>`;
+  }
 
   if (fase.deload) {
     h += `<div class="aviso"><span>▼</span><span>Semana de deload: o app já reduziu as séries em 40%. Mantenha as cargas.</span></div>`;
@@ -157,39 +222,34 @@ function renderInicio() {
       <div style="height:10px"></div>
       <button class="primario largo" data-acao="continuar">Continuar treino</button>
     </div>`;
-  } else if (doDia) {
-    h += `<h2>Treino de hoje</h2>
+  } else if (prox) {
+    const ultS = ultimaSessao();
+    h += `<h2>Próximo na sequência</h2>
     <div class="card">
       <div class="col">
-        <b style="font-size:18px">${esc(doDia.nome)}</b>
-        <span class="muted">${esc(doDia.subtitulo || '')}</span>
+        <b style="font-size:18px">${esc(prox.nome)}</b>
+        <span class="muted">${esc(prox.subtitulo || '')}</span>
       </div>
-      <div class="mini" style="margin-top:8px">${doDia.itens.length} exercícios · ${doDia.itens.reduce((a, i) => a + seriesAlvo(i, sem), 0)} séries</div>
-      ${doDia.nota ? `<div class="aviso"><span>›</span><span>${esc(doDia.nota)}</span></div>` : ''}
+      <div class="mini" style="margin-top:8px">${prox.itens.length} exercícios · ${prox.itens.reduce((a, i) => a + seriesAlvo(i, sem), 0)} séries${ultS ? ' · último treino há ' + diasDesde(ultS.data) : ''}</div>
+      ${prox.nota ? `<div class="aviso"><span>›</span><span>${esc(prox.nota)}</span></div>` : ''}
       <div style="height:12px"></div>
-      <button class="primario largo" data-acao="iniciar" data-ficha="${doDia.id}">Iniciar ${esc(doDia.nome)}</button>
-    </div>`;
-  } else {
-    h += `<h2>Hoje</h2>
-    <div class="card centro">
-      <div style="font-size:30px">☾</div>
-      <b>Dia de descanso</b>
-      <div class="muted">Nenhuma ficha marcada para hoje.</div>
+      <button class="primario largo" data-acao="iniciar" data-ficha="${prox.id}">Iniciar ${esc(prox.nome)}</button>
     </div>`;
   }
 
-  h += `<h2>Iniciar outro treino</h2>`;
-  estado.fichas.forEach(f => {
-    if (doDia && f.id === doDia.id && !ativa) return;
-    h += `<div class="card clicavel" data-acao="iniciar" data-ficha="${f.id}">
+  h += `<h2>Sequência</h2>`;
+  ord.forEach(f => {
+    const eProx = prox && f.id === prox.id && !ativa;
+    h += `<div class="card clicavel" data-acao="iniciar" data-ficha="${f.id}"
+      ${eProx ? 'style="border-color:var(--acento)"' : ''}>
       <div class="linha-flex">
-        <div class="col"><b>${esc(f.nome)}</b><span class="mini">${esc(f.subtitulo || '')}</span></div>
-        <span class="mini">${DIAS_CURTO[f.dia % 7]} · ${f.itens.length} ex.</span>
+        <div class="col"><b>${eProx ? '→ ' : ''}${esc(f.nome)}</b><span class="mini">${esc(f.subtitulo || '')}</span></div>
+        <span class="mini">${f.ordem ? f.ordem + 'º' : ''} · ${f.itens.length} ex.</span>
       </div>
     </div>`;
   });
 
-  const ult = estado.sessoes.slice().sort((a, b) => (a.data < b.data ? 1 : -1))[0];
+  const ult = ultimaSessao();
   if (ult) {
     const f = ficha(ult.fichaId);
     h += `<h2>Último treino</h2>
@@ -294,6 +354,8 @@ function renderExec() {
       <div class="ex-corpo ${aberto ? '' : 'oculto'}">`;
 
     if (e.aviso) h += `<div class="aviso"><span>⚠</span><span>${esc(e.aviso)}</span></div>`;
+    if (e.nota) h += `<div class="ult-vez" style="padding-bottom:0">${esc(e.nota)}</div>`;
+    if (item.excecao) h += `<div class="ult-vez" style="padding-bottom:0">(*) Reps altas por motivo articular — não subir carga além da faixa.</div>`;
 
     if (u) {
       const desc = u.series.map(x => fmtNum(x.carga) + (x.reps != null ? '×' + x.reps : '')).join(' · ');
@@ -312,8 +374,9 @@ function renderExec() {
       const cargaSug = r.carga != null ? r.carga : (sug ? (sug.tipo === 'subir' ? sug.carga : sug.carga) : '');
       const repsPad = r.reps != null ? r.reps : item.repMax;
       const temDet = r.rir != null || (r.tipo && r.tipo !== 'valida') || r.obs || r.descanso != null;
+      const ehFalha = !item.ativacao && j === alvo - 1;
       h += `<div class="serie ${ok ? 'ok' : ''}" data-i="${i}" data-j="${j}">
-        <div class="n">${j + 1}</div>
+        <div class="n ${ehFalha ? 'falha' : ''}" ${ehFalha ? 'title="última série: até a falha"' : ''}>${j + 1}</div>
         <input class="carga" type="number" inputmode="decimal" step="0.5" placeholder="kg"
                value="${r.carga != null ? r.carga : ''}" data-campo="carga"
                ${r.carga == null && cargaSug !== '' ? `data-sug="${cargaSug}"` : ''}>
@@ -384,13 +447,14 @@ function finalizarSessao() {
 /* ================== tela: fichas ================== */
 
 function renderFichas() {
+  const prox = proximaFicha();
   let h = `<div class="topo"><div><h1>Fichas</h1>
-    <div class="sub">${estado.fichas.length} treinos · toque para editar</div></div></div>`;
-  estado.fichas.forEach(f => {
+    <div class="sub">sequência de ${estado.fichas.length} treinos · toque para editar</div></div></div>`;
+  fichasOrdenadas().forEach(f => {
     h += `<div class="card clicavel" data-acao="editar-ficha" data-id="${f.id}">
       <div class="linha-flex">
         <div class="col"><b>${esc(f.nome)}</b><span class="mini">${esc(f.subtitulo || '')}</span></div>
-        <span class="tag">${DIAS_CURTO[f.dia % 7]}</span>
+        <span class="tag ${prox && prox.id === f.id ? 'verde' : ''}">${f.ordem ? f.ordem + 'º' : '—'}</span>
       </div>
       <div class="mini" style="margin-top:8px">${f.itens.map(i => esc(ex(i.ex).nome)).join(' · ')}</div>
     </div>`;
@@ -423,10 +487,10 @@ function editarFicha(id) {
   <div class="detalhes" style="grid-template-columns:1fr 1fr">
     <div class="campo largo"><label>Nome</label><input data-f="nome" value="${esc(f.nome)}"></div>
     <div class="campo largo"><label>Subtítulo</label><input data-f="subtitulo" value="${esc(f.subtitulo || '')}"></div>
-    <div class="campo largo"><label>Dia da semana</label>
-      <select data-f="dia">${[1,2,3,4,5,6,7].map(d =>
-        `<option value="${d}" ${f.dia === d ? 'selected' : ''}>${DIAS[d % 7]}</option>`).join('')}
-        <option value="0" ${!f.dia ? 'selected' : ''}>Sem dia fixo</option></select></div>
+    <div class="campo largo"><label>Posição na sequência</label>
+      <select data-f="ordem">${[1,2,3,4,5,6,7,8].map(d =>
+        `<option value="${d}" ${f.ordem === d ? 'selected' : ''}>${d}º treino do ciclo</option>`).join('')}
+        <option value="0" ${!f.ordem ? 'selected' : ''}>Fora da sequência</option></select></div>
     <div class="campo largo"><label>Nota do treino</label><input data-f="nota" value="${esc(f.nota || '')}"></div>
   </div>
   <h2>Exercícios</h2>`;
@@ -530,19 +594,20 @@ function renderProgresso() {
   let h = `<div class="topo"><div><h1>Progresso</h1>
     <div class="sub">só a academia habitual entra nos gráficos</div></div></div>`;
 
-  /* volume semanal */
-  const hoje = new Date();
-  const seg = new Date(hoje); seg.setDate(hoje.getDate() - ((hoje.getDay() + 6) % 7));
-  const inicioSemana = iso(seg);
+  /* volume do ciclo corrente (últimos treinos distintos da sequência) */
+  const doCiclo = seriesDoCiclo();
   const contagem = {};
-  estado.sessoes.filter(s => s.data >= inicioSemana).forEach(s => {
+  doCiclo.forEach(s => {
     s.series.filter(x => x.tipo !== 'aquecimento').forEach(x => {
       ex(x.ex).grupos.forEach(g => { contagem[g] = (contagem[g] || 0) + 1; });
     });
   });
-  h += `<h2>Volume desta semana</h2><div class="card">`;
+  const nFichas = fichasOrdenadas().length;
+  h += `<h2>Volume do ciclo</h2>
+    <div class="mini" style="margin:-6px 0 8px">${doCiclo.length} de ${nFichas} treinos da sequência${doCiclo.length ? ' · desde ' + dataBR(doCiclo[doCiclo.length - 1].data) : ''}</div>
+    <div class="card">`;
   const grupos = Object.keys(GRUPOS).filter(g => estado.config.alvos[g] > 0 || contagem[g]);
-  if (!grupos.length) h += `<div class="mini">Nenhuma série registrada esta semana.</div>`;
+  if (!grupos.length) h += `<div class="mini">Nenhuma série registrada ainda.</div>`;
   grupos.forEach(g => {
     const feito = contagem[g] || 0;
     const alvo = estado.config.alvos[g] || 0;
@@ -796,7 +861,7 @@ document.addEventListener('click', async (ev) => {
     await salvarJa(); fecharModal(); toast('Ficha excluída.'); render();
   }
   if (a === 'nova-ficha') {
-    const nova = { id: uid(), nome: 'Nova ficha', subtitulo: '', dia: 0, itens: [] };
+    const nova = { id: uid(), nome: 'Nova ficha', subtitulo: '', ordem: fichasOrdenadas().length + 1, itens: [] };
     estado.fichas.push(nova); await salvarJa(); editarFicha(nova.id);
   }
   if (a === 'toggle-reintro') {
@@ -833,13 +898,15 @@ function lerFormFicha(f) {
   if (g('nome') != null) f.nome = g('nome');
   if (g('subtitulo') != null) f.subtitulo = g('subtitulo');
   if (g('nota') != null) f.nota = g('nota');
-  if (g('dia') != null) f.dia = +g('dia');
+  if (g('ordem') != null) f.ordem = +g('ordem');
   $$('[data-it]', m).forEach(inp => {
     const it = f.itens[+inp.dataset.it];
     if (!it) return;
     const v = num(inp.value);
-    if (inp.dataset.c === 'rirMax') { it.rirMax = v; if (it.rirMin == null || it.rirMin > v) it.rirMin = v; }
-    else if (v != null) it[inp.dataset.c] = v;
+    if (inp.dataset.c === 'rirMax') {
+      it.rirMax = v;
+      if (it.rirMin != null && v != null && it.rirMin > v) it.rirMin = v;
+    } else if (v != null) it[inp.dataset.c] = v;
   });
 }
 
@@ -849,7 +916,7 @@ document.addEventListener('change', async (ev) => {
   if (t.dataset.acao === 'add-item' && t.value) {
     const f = ficha(ctxModal.fichaId);
     lerFormFicha(f);
-    f.itens.push({ ex: t.value, series: 3, repMin: 8, repMax: 12, rirMin: 1, rirMax: 2 });
+    f.itens.push({ ex: t.value, series: 3, repMin: 8, repMax: 8, rirMax: 1 });
     await salvarJa(); editarFicha(f.id);
     return;
   }

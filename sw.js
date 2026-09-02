@@ -1,7 +1,7 @@
 /* Service worker: deixa o app abrir sem internet.
    Ao subir uma versão nova dos arquivos, mude o número do CACHE abaixo. */
 
-const CACHE = 'treino-v1';
+const CACHE = 'treino-v2';
 const ARQUIVOS = [
   './',
   'index.html',

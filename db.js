@@ -65,6 +65,7 @@ function estadoInicial() {
   seg.setDate(hoje.getDate() - ((hoje.getDay() + 6) % 7)); // segunda desta semana
   return {
     versao: 1,
+    seedVersao: SEED_VERSAO,
     config: {
       incremento: 2.5,
       academiaPadrao: 'Cimerian',
@@ -87,14 +88,36 @@ function iso(d) {
 
 let estado = null;
 
+/* Resultado da última carga, para o app avisar o que mudou. */
+let migracao = null;
+
 async function carregarEstado() {
   const salvo = await lerBruto();
   if (salvo && salvo.versao) {
     estado = salvo;
-    // migração leve: garante chaves novas sem apagar dados
     const base = estadoInicial();
     estado.config = Object.assign({}, base.config, estado.config);
     if (!estado.reintroducao) estado.reintroducao = base.reintroducao;
+
+    /* Ficha nova publicada: substitui exercícios, fichas e alvos,
+       preservando todo o histórico de treinos já registrados. */
+    if (estado.seedVersao !== SEED_VERSAO) {
+      const antes = estado.seedVersao || 1;
+      const statusReintro = {};
+      (estado.reintroducao || []).forEach(r => { statusReintro[r.nome] = r.status; });
+
+      estado.exercicios = JSON.parse(JSON.stringify(EXERCICIOS));
+      estado.fichas = JSON.parse(JSON.stringify(FICHAS));
+      estado.config.alvos = Object.fromEntries(Object.entries(GRUPOS).map(([k, v]) => [k, v.alvo]));
+      estado.reintroducao = JSON.parse(JSON.stringify(REINTRODUCAO))
+        .map(r => (statusReintro[r.nome] ? { ...r, status: statusReintro[r.nome] } : r));
+
+      const tinhaSessaoAtiva = !!estado.sessaoAtiva;
+      estado.sessaoAtiva = null; // os índices da ficha antiga não valem mais
+      estado.seedVersao = SEED_VERSAO;
+      migracao = { de: antes, para: SEED_VERSAO, sessoes: estado.sessoes.length, descartouSessaoAtiva: tinhaSessaoAtiva };
+      await gravarBruto(estado);
+    }
   } else {
     estado = estadoInicial();
     await salvar();

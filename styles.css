@@ -137,6 +137,7 @@ nav button.ativo { color: var(--acento); }
   border-bottom: 1px solid var(--linha);
 }
 .serie:last-child { border-bottom: none; }
+.serie .n.falha { background: var(--alerta-esc); color: var(--alerta); }
 .serie.ok .n { background: var(--acento); color: #06210f; }
 .serie .n {
   width: 26px; height: 26px; border-radius: 8px; background: var(--card-2);
