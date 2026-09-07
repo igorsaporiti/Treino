@@ -78,6 +78,7 @@ function estadoInicial() {
     fichas: JSON.parse(JSON.stringify(FICHAS)),
     sessoes: [],
     sessaoAtiva: null,
+    substitutos: {},
     reintroducao: JSON.parse(JSON.stringify(REINTRODUCAO))
   };
 }
@@ -98,6 +99,12 @@ async function carregarEstado() {
     const base = estadoInicial();
     estado.config = Object.assign({}, base.config, estado.config);
     if (!estado.reintroducao) estado.reintroducao = base.reintroducao;
+    if (!estado.substitutos) estado.substitutos = {};
+
+    /* sessão em andamento no formato antigo (sem itens próprios) não é recuperável */
+    if (estado.sessaoAtiva && !Array.isArray(estado.sessaoAtiva.itens)) {
+      estado.sessaoAtiva = null;
+    }
 
     /* Ficha nova publicada: substitui exercícios, fichas e alvos,
        preservando todo o histórico de treinos já registrados. */

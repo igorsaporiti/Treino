@@ -7,15 +7,15 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
 
 const DIAS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
 const DIAS_CURTO = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+const MESES = ['', 'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+               'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const num = (v) => { const n = parseFloat(String(v).replace(',', '.')); return isFinite(n) ? n : null; };
 const fmtNum = (n) => (n == null ? '—' : String(Math.round(n * 100) / 100).replace('.', ','));
+const fmtKg = (n) => Math.round(n).toLocaleString('pt-BR');
 
-function dataBR(s) {
-  const [a, m, d] = s.split('-');
-  return `${d}/${m}`;
-}
+function dataBR(s) { const [a, m, d] = s.split('-'); return `${d}/${m}`; }
 function dataBRLonga(s) {
   const [a, m, d] = s.split('-');
   const dt = new Date(+a, +m - 1, +d);
@@ -27,7 +27,6 @@ function diasEntre(a, b) {
   return Math.round((Date.UTC(b1, b2 - 1, b3) - Date.UTC(a1, a2 - 1, a3)) / 86400000);
 }
 function hojeISO() { return iso(new Date()); }
-
 function diasDesde(dataISO) {
   const d = diasEntre(dataISO, hojeISO());
   if (d <= 0) return 'hoje';
@@ -45,6 +44,7 @@ function toast(msg) {
 
 function ex(id) { return estado.exercicios.find(e => e.id === id) || { id, nome: id, grupos: [] }; }
 function ficha(id) { return estado.fichas.find(f => f.id === id); }
+function nomeFicha(id) { const f = ficha(id); return f ? f.nome : 'Treino'; }
 
 /* ================== sequência cíclica ================== */
 
@@ -52,7 +52,6 @@ function fichasOrdenadas() {
   return estado.fichas.slice().sort((a, b) => (a.ordem || 99) - (b.ordem || 99));
 }
 
-/* sessões da mais recente para a mais antiga (desempate: ordem de registro) */
 function sessoesRecentes() {
   return estado.sessoes
     .map((s, i) => ({ s, i }))
@@ -62,7 +61,6 @@ function sessoesRecentes() {
 
 function ultimaSessao() { return sessoesRecentes()[0] || null; }
 
-/* próximo treino da sequência, a partir do último registrado */
 function proximaFicha() {
   const ord = fichasOrdenadas();
   if (!ord.length) return null;
@@ -73,19 +71,18 @@ function proximaFicha() {
   return ord[(idx + 1) % ord.length];
 }
 
-/* séries do ciclo corrente: os últimos N treinos distintos da sequência */
-function seriesDoCiclo() {
-  const ord = fichasOrdenadas();
-  const n = ord.length || 5;
+/* últimos treinos distintos da sequência = um ciclo */
+function sessoesDoCiclo() {
+  const n = fichasOrdenadas().length || 5;
   const vistos = new Set();
-  const sessoes = [];
+  const out = [];
   for (const s of sessoesRecentes()) {
-    if (vistos.has(s.fichaId)) break;   // completou uma volta
+    if (vistos.has(s.fichaId)) break;
     vistos.add(s.fichaId);
-    sessoes.push(s);
-    if (sessoes.length >= n) break;
+    out.push(s);
+    if (out.length >= n) break;
   }
-  return sessoes;
+  return out;
 }
 
 /* ================== bloco de 8 semanas ================== */
@@ -104,7 +101,7 @@ function seriesAlvo(item, sem) {
   return faseBloco(sem).deload ? Math.max(1, Math.round(item.series * 0.6)) : item.series;
 }
 
-/* ================== prescrição / histórico ================== */
+/* ================== prescrição ================== */
 
 function textoPresc(item) {
   const e = ex(item.ex);
@@ -122,20 +119,37 @@ function textoPresc(item) {
   return t;
 }
 
-/* sessões passadas (mais recente primeiro), opcionalmente só da academia habitual */
+/* ================== histórico por exercício ================== */
+
 function sessoesDe(exId, soHabitual = true) {
   const hab = estado.config.academiaPadrao;
-  return estado.sessoes
-    .filter(s => (!soHabitual || s.academia === hab) && s.series.some(x => x.ex === exId && x.carga != null))
-    .sort((a, b) => (a.data < b.data ? 1 : -1));
+  return sessoesRecentes()
+    .filter(s => (!soHabitual || s.academia === hab) && s.series.some(x => x.ex === exId && x.carga != null));
 }
 
-function ultimaVez(exId) {
-  const s = sessoesDe(exId, true)[0];
-  if (!s) return null;
-  const series = s.series.filter(x => x.ex === exId && x.carga != null && x.tipo !== 'aquecimento');
-  if (!series.length) return null;
-  return { data: s.data, series, academia: s.academia };
+/* as N últimas vezes que este exercício apareceu */
+function ultimasVezes(exId, n = 3) {
+  return sessoesDe(exId, true).slice(0, n).map(s => ({
+    data: s.data,
+    series: s.series.filter(x => x.ex === exId && x.carga != null && x.tipo !== 'aquecimento')
+  })).filter(u => u.series.length);
+}
+
+function ultimaVez(exId) { return ultimasVezes(exId, 1)[0] || null; }
+
+/* maior carga registrada antes de uma dada sessão.
+   Usa a ordem de registro, não a data: dois treinos no mesmo dia contam certo. */
+function recordeAntes(exId, indiceLimite) {
+  const hab = estado.config.academiaPadrao;
+  let max = 0;
+  estado.sessoes.forEach((s, i) => {
+    if (indiceLimite != null && i >= indiceLimite) return;
+    if (s.academia !== hab) return;
+    s.series.forEach(x => {
+      if (x.ex === exId && x.tipo !== 'aquecimento' && x.carga > max) max = x.carga;
+    });
+  });
+  return max;
 }
 
 /* sugestão de progressão dupla */
@@ -148,10 +162,9 @@ function sugestao(item) {
   const cargas = validas.map(x => x.carga).filter(c => c != null);
   if (!cargas.length) return null;
   const carga = Math.max(...cargas);
-  if (fechouTopo) {
-    return { tipo: 'subir', carga: carga + estado.config.incremento, de: carga };
-  }
-  return { tipo: 'manter', carga };
+  return fechouTopo
+    ? { tipo: 'subir', carga: carga + estado.config.incremento, de: carga }
+    : { tipo: 'manter', carga };
 }
 
 /* ================== navegação ================== */
@@ -161,7 +174,7 @@ let telaAtual = 'inicio';
 function irPara(nome) {
   telaAtual = nome;
   $$('.tela').forEach(t => t.classList.remove('ativa'));
-  const alvo = $('#tela-' + (nome === 'exec' ? 'exec' : nome));
+  const alvo = $('#tela-' + nome);
   if (alvo) alvo.classList.add('ativa');
   $$('nav button').forEach(b => b.classList.toggle('ativo', b.dataset.tela === nome));
   $('#barra-exec').hidden = !(nome === 'exec' && estado.sessaoAtiva);
@@ -186,7 +199,6 @@ function renderInicio() {
   const fase = faseBloco(sem);
   const prox = proximaFicha();
   const ativa = estado.sessaoAtiva;
-  const ord = fichasOrdenadas();
 
   let h = `<div class="topo">
     <div><h1>${DIAS[hoje.getDay()]}</h1>
@@ -211,14 +223,11 @@ function renderInicio() {
   }
 
   if (ativa) {
-    const f = ficha(ativa.fichaId);
     const feitas = ativa.series.filter(s => s.carga != null).length;
     h += `<h2>Em andamento</h2>
     <div class="card">
-      <div class="linha-flex">
-        <div class="col"><b>${esc(f ? f.nome : 'Treino')}</b>
-        <span class="muted">${feitas} série${feitas === 1 ? '' : 's'} registrada${feitas === 1 ? '' : 's'} · ${esc(ativa.academia)}</span></div>
-      </div>
+      <div class="col"><b>${esc(nomeFicha(ativa.fichaId))}</b>
+      <span class="muted">${feitas} série${feitas === 1 ? '' : 's'} registrada${feitas === 1 ? '' : 's'} · ${esc(ativa.academia)}</span></div>
       <div style="height:10px"></div>
       <button class="primario largo" data-acao="continuar">Continuar treino</button>
     </div>`;
@@ -238,7 +247,7 @@ function renderInicio() {
   }
 
   h += `<h2>Sequência</h2>`;
-  ord.forEach(f => {
+  fichasOrdenadas().forEach(f => {
     const eProx = prox && f.id === prox.id && !ativa;
     h += `<div class="card clicavel" data-acao="iniciar" data-ficha="${f.id}"
       ${eProx ? 'style="border-color:var(--acento)"' : ''}>
@@ -251,12 +260,11 @@ function renderInicio() {
 
   const ult = ultimaSessao();
   if (ult) {
-    const f = ficha(ult.fichaId);
     h += `<h2>Último treino</h2>
     <div class="card clicavel" data-acao="ver-sessao" data-id="${ult.id}">
       <div class="linha-flex">
-        <div class="col"><b>${esc(f ? f.nome : 'Treino')}</b>
-        <span class="mini">${dataBRLonga(ult.data)} · ${ult.series.filter(s => s.carga != null).length} séries</span></div>
+        <div class="col"><b>${esc(nomeFicha(ult.fichaId))}</b>
+        <span class="mini">${dataBRLonga(ult.data)} · ${ult.series.length} séries</span></div>
         <span class="mini">›</span>
       </div>
     </div>`;
@@ -265,12 +273,27 @@ function renderInicio() {
   $('#tela-inicio').innerHTML = h;
 }
 
-/* ================== tela: execução ================== */
+/* ================== sessão em andamento ================== */
+
+/* Os itens da SESSÃO são uma cópia dos itens da ficha. É isso que permite
+   substituir, pular e acrescentar sem mexer na ficha. */
+function itemDeSessao(item, sem) {
+  return {
+    uid: uid(),
+    ex: item.ex,
+    series: seriesAlvo(item, sem),
+    repMin: item.repMin, repMax: item.repMax,
+    rirMin: item.rirMin, rirMax: item.rirMax,
+    excecao: !!item.excecao, ativacao: !!item.ativacao,
+    origem: null, pulado: false, substituido: false, extra: false
+  };
+}
 
 function iniciarSessao(fichaId) {
   const f = ficha(fichaId);
   if (!f) return;
   const sem = semanaBloco();
+  const itens = f.itens.map(it => itemDeSessao(it, sem));
   estado.sessaoAtiva = {
     id: uid(),
     data: hojeISO(),
@@ -280,24 +303,79 @@ function iniciarSessao(fichaId) {
     inicio: Date.now(),
     pesoCorporal: null,
     obs: '',
+    itens,
     series: [],
-    aberto: 0
+    aberto: itens.length ? itens[0].uid : null
   };
   salvar();
   irPara('exec');
 }
 
-function chaveSerie(i, j) { return i + ':' + j; }
-function achaSerie(i, j) {
-  return estado.sessaoAtiva.series.find(s => s.k === chaveSerie(i, j));
-}
-function gravaSerie(i, j, dados) {
+function itemPorUid(u) { return estado.sessaoAtiva.itens.find(i => i.uid === u); }
+function achaSerie(u, j) { return estado.sessaoAtiva.series.find(s => s.k === u + ':' + j); }
+function seriesFeitas(u) { return estado.sessaoAtiva.series.filter(s => s.k.startsWith(u + ':') && s.carga != null); }
+
+function gravaSerie(u, j, dados) {
   const s = estado.sessaoAtiva;
-  let r = achaSerie(i, j);
-  if (!r) { r = { k: chaveSerie(i, j) }; s.series.push(r); }
+  let r = achaSerie(u, j);
+  if (!r) { r = { k: u + ':' + j }; s.series.push(r); }
   Object.assign(r, dados);
   salvar();
 }
+
+/* substitutos já usados para um exercício, mais recentes primeiro */
+function substitutosDe(exId) {
+  return (estado.substitutos && estado.substitutos[exId]) || [];
+}
+function registraSubstituto(exOriginal, exNovo) {
+  if (!estado.substitutos) estado.substitutos = {};
+  const lista = (estado.substitutos[exOriginal] || []).filter(x => x !== exNovo);
+  lista.unshift(exNovo);
+  estado.substitutos[exOriginal] = lista.slice(0, 3);
+}
+
+function substituirItem(u, exNovo) {
+  const s = estado.sessaoAtiva;
+  const idx = s.itens.findIndex(i => i.uid === u);
+  if (idx < 0) return;
+  const orig = s.itens[idx];
+  const feitas = seriesFeitas(u).length;
+  const restantes = Math.max(1, orig.series - feitas);
+
+  orig.substituido = true;
+  registraSubstituto(orig.ex, exNovo);
+
+  const novo = {
+    uid: uid(),
+    ex: exNovo,
+    series: restantes,
+    repMin: orig.repMin, repMax: orig.repMax,
+    rirMin: orig.rirMin, rirMax: orig.rirMax,
+    excecao: false, ativacao: orig.ativacao,
+    origem: orig.uid, pulado: false, substituido: false, extra: false
+  };
+  s.itens.splice(idx + 1, 0, novo);
+  s.aberto = novo.uid;
+  salvar();
+  fecharModal();
+  renderExec();
+  toast('Substituído por ' + ex(exNovo).nome + '.');
+}
+
+function acrescentarExtra(exNovo) {
+  const s = estado.sessaoAtiva;
+  const novo = {
+    uid: uid(), ex: exNovo, series: 3, repMin: 8, repMax: 8, rirMax: 1,
+    excecao: false, ativacao: false, origem: null, pulado: false, substituido: false, extra: true
+  };
+  s.itens.push(novo);
+  s.aberto = novo.uid;
+  salvar();
+  fecharModal();
+  renderExec();
+}
+
+/* ================== tela: execução ================== */
 
 function renderExec() {
   const s = estado.sessaoAtiva;
@@ -308,12 +386,12 @@ function renderExec() {
     return;
   }
   const f = ficha(s.fichaId);
-  const sem = s.semanaBloco;
-  const fase = faseBloco(sem);
+  const fase = faseBloco(s.semanaBloco);
 
   let h = `<div class="topo">
-    <div><h1>${esc(f.nome)}</h1><div class="sub">${esc(f.subtitulo || '')} · ${dataBR(s.data)}</div></div>
-    <span class="tag ${fase.classe}">${fase.deload ? 'DELOAD' : 'S' + sem}</span>
+    <div><h1>${esc(f ? f.nome : 'Treino')}</h1>
+      <div class="sub">${esc(f ? (f.subtitulo || '') : '')} · ${dataBR(s.data)}</div></div>
+    <span class="tag ${fase.classe}">${fase.deload ? 'DELOAD' : 'S' + s.semanaBloco}</span>
   </div>`;
 
   h += `<div class="card">
@@ -329,85 +407,163 @@ function renderExec() {
       ? `<div class="aviso"><span>!</span><span>Fora da academia habitual: estas cargas não entram nos gráficos de progressão.</span></div>` : ''}
   </div>`;
 
-  if (f.nota) h += `<div class="aviso"><span>›</span><span>${esc(f.nota)}</span></div><div style="height:10px"></div>`;
+  if (f && f.nota) h += `<div class="aviso"><span>›</span><span>${esc(f.nota)}</span></div><div style="height:10px"></div>`;
 
-  f.itens.forEach((item, i) => {
+  s.itens.forEach((item, i) => {
     const e = ex(item.ex);
-    const alvo = seriesAlvo(item, sem);
-    const feitas = Array.from({ length: alvo }, (_, j) => achaSerie(i, j)).filter(r => r && r.carga != null).length;
-    const completo = feitas >= alvo;
-    const aberto = s.aberto === i;
+    const feitas = seriesFeitas(item.uid).length;
+    const completo = feitas >= item.series;
+    const aberto = s.aberto === item.uid;
     const sug = sugestao(item);
-    const u = ultimaVez(item.ex);
     const unSeg = e.unidade === 'seg';
+    const inativo = item.pulado || item.substituido;
 
-    h += `<div class="ex-bloco ${completo && !aberto ? 'feito' : ''}" data-bloco="${i}">
-      <div class="ex-cab" data-acao="abrir" data-i="${i}">
+    let etiqueta = '';
+    if (item.pulado) etiqueta = '<span class="tag">pulado</span>';
+    else if (item.substituido) etiqueta = '<span class="tag ambar">substituído</span>';
+    else if (completo) etiqueta = '<span class="tag verde">✓</span>';
+    else etiqueta = `<span class="mini">${feitas}/${item.series}</span>`;
+
+    h += `<div class="ex-bloco ${(completo || inativo) && !aberto ? 'feito' : ''} ${item.origem ? 'derivado' : ''}" data-bloco="${i}" data-uid="${item.uid}">
+      <div class="ex-cab" data-acao="abrir" data-uid="${item.uid}">
         <div class="col">
-          <span class="ex-nome">${esc(e.nome)}</span>
-          <span class="ex-presc">${textoPresc({ ...item, series: alvo })}</span>
+          <span class="ex-nome">${item.origem ? '↳ ' : ''}${esc(e.nome)}${item.extra ? ' <span class="tag azul">extra</span>' : ''}</span>
+          <span class="ex-presc">${inativo ? (item.pulado ? 'não realizado' : 'trocado — ' + feitas + ' série' + (feitas === 1 ? '' : 's') + ' aproveitada' + (feitas === 1 ? '' : 's')) : textoPresc(item)}</span>
         </div>
-        <div style="text-align:right;white-space:nowrap">
-          ${completo ? '<span class="tag verde">✓</span>' : `<span class="mini">${feitas}/${alvo}</span>`}
-        </div>
+        <div style="text-align:right;white-space:nowrap">${etiqueta}</div>
       </div>
       <div class="ex-corpo ${aberto ? '' : 'oculto'}">`;
 
-    if (e.aviso) h += `<div class="aviso"><span>⚠</span><span>${esc(e.aviso)}</span></div>`;
-    if (e.nota) h += `<div class="ult-vez" style="padding-bottom:0">${esc(e.nota)}</div>`;
-    if (item.excecao) h += `<div class="ult-vez" style="padding-bottom:0">(*) Reps altas por motivo articular — não subir carga além da faixa.</div>`;
-
-    if (u) {
-      const desc = u.series.map(x => fmtNum(x.carga) + (x.reps != null ? '×' + x.reps : '')).join(' · ');
-      h += `<div class="ult-vez">Última vez (${dataBR(u.data)}): <b>${desc}</b></div>`;
+    if (item.pulado) {
+      h += `<div class="ult-vez">Marcado como não realizado neste treino.</div>
+        <div class="botoes" style="padding-bottom:10px">
+          <button class="pequeno fantasma" data-acao="despular" data-uid="${item.uid}">Desfazer</button>
+        </div>`;
     } else {
-      h += `<div class="ult-vez">Primeiro registro deste exercício.</div>`;
-    }
-    if (sug && sug.tipo === 'subir') {
-      h += `<div class="aviso" style="background:var(--acento-esc);color:var(--acento)">
-        <span>↑</span><span>Fechou o topo da faixa. Sugestão: <b>${fmtNum(sug.carga)} kg</b> e voltar a ${item.repMin} reps.</span></div>`;
-    }
+      if (e.aviso) h += `<div class="aviso"><span>⚠</span><span>${esc(e.aviso)}</span></div>`;
+      if (e.nota) h += `<div class="ult-vez" style="padding-bottom:0">${esc(e.nota)}</div>`;
+      if (item.excecao) h += `<div class="ult-vez" style="padding-bottom:0">(*) Reps altas por motivo articular — não subir carga além da faixa.</div>`;
 
-    for (let j = 0; j < alvo; j++) {
-      const r = achaSerie(i, j) || {};
-      const ok = r.carga != null;
-      const cargaSug = r.carga != null ? r.carga : (sug ? (sug.tipo === 'subir' ? sug.carga : sug.carga) : '');
-      const repsPad = r.reps != null ? r.reps : item.repMax;
-      const temDet = r.rir != null || (r.tipo && r.tipo !== 'valida') || r.obs || r.descanso != null;
-      const ehFalha = !item.ativacao && j === alvo - 1;
-      h += `<div class="serie ${ok ? 'ok' : ''}" data-i="${i}" data-j="${j}">
-        <div class="n ${ehFalha ? 'falha' : ''}" ${ehFalha ? 'title="última série: até a falha"' : ''}>${j + 1}</div>
-        <input class="carga" type="number" inputmode="decimal" step="0.5" placeholder="kg"
-               value="${r.carga != null ? r.carga : ''}" data-campo="carga"
-               ${r.carga == null && cargaSug !== '' ? `data-sug="${cargaSug}"` : ''}>
-        <input class="carga" style="width:62px" type="number" inputmode="numeric" step="1"
-               value="${r.reps != null ? r.reps : ''}" placeholder="${unSeg ? repsPad + 's' : repsPad}" data-campo="reps">
-        <button class="btn-ok ${ok ? 'primario' : 'pendente'}" data-acao="confirmar">✓</button>
-        <button class="btn-det ${temDet ? 'marcado' : ''}" data-acao="detalhes">⋯</button>
-        <div class="detalhes oculto" data-det="${i}:${j}">
-          <div class="campo"><label>RIR</label>
-            <input type="number" inputmode="numeric" data-campo="rir" value="${r.rir ?? ''}" placeholder="${item.rirMax ?? ''}"></div>
-          <div class="campo"><label>Tipo</label>
-            <select data-campo="tipo">
-              <option value="valida" ${(!r.tipo || r.tipo === 'valida') ? 'selected' : ''}>Válida</option>
-              <option value="aquecimento" ${r.tipo === 'aquecimento' ? 'selected' : ''}>Aquecimento</option>
-              <option value="falha" ${r.tipo === 'falha' ? 'selected' : ''}>Falha</option>
-            </select></div>
-          <div class="campo"><label>Descanso (s)</label>
-            <input type="number" inputmode="numeric" data-campo="descanso" value="${r.descanso ?? ''}" placeholder="—"></div>
-          <div class="campo largo"><label>Observação</label>
-            <input type="text" data-campo="obs" value="${esc(r.obs || '')}" placeholder="opcional"></div>
-        </div>
+      const hist = ultimasVezes(item.ex, 3);
+      if (hist.length) {
+        h += `<div class="ult-vez">Últimas vezes:</div><div class="hist-mini">`;
+        hist.forEach((u, k) => {
+          const desc = u.series.map(x => fmtNum(x.carga) + (x.reps != null ? '×' + x.reps : '')).join(' · ');
+          h += `<div class="${k === 0 ? 'recente' : ''}"><span>${dataBR(u.data)}</span><b>${desc}</b></div>`;
+        });
+        h += `</div>`;
+      } else {
+        h += `<div class="ult-vez">Primeiro registro deste exercício.</div>`;
+      }
+
+      if (sug && sug.tipo === 'subir' && !item.excecao) {
+        h += `<div class="aviso" style="background:var(--acento-esc);color:var(--acento)">
+          <span>↑</span><span>Fechou o topo da faixa. Sugestão: <b>${fmtNum(sug.carga)} kg</b> e voltar a ${item.repMin} reps.</span></div>`;
+      }
+
+      for (let j = 0; j < item.series; j++) {
+        const r = achaSerie(item.uid, j) || {};
+        const ok = r.carga != null;
+        const cargaSug = r.carga != null ? r.carga : (sug ? sug.carga : '');
+        const repsPad = r.reps != null ? r.reps : item.repMax;
+        const temDet = r.rir != null || (r.tipo && r.tipo !== 'valida') || r.obs || r.descanso != null;
+        const ehFalha = !item.ativacao && j === item.series - 1;
+        h += `<div class="serie ${ok ? 'ok' : ''}" data-uid="${item.uid}" data-j="${j}">
+          <div class="n ${ehFalha ? 'falha' : ''}">${j + 1}</div>
+          <input class="carga" type="number" inputmode="decimal" step="0.5" placeholder="kg"
+                 value="${r.carga != null ? r.carga : ''}" data-campo="carga"
+                 ${r.carga == null && cargaSug !== '' ? `data-sug="${cargaSug}"` : ''}>
+          <input class="carga" style="width:62px" type="number" inputmode="numeric" step="1"
+                 value="${r.reps != null ? r.reps : ''}" placeholder="${unSeg ? repsPad + 's' : repsPad}" data-campo="reps">
+          <button class="btn-ok ${ok ? 'primario' : 'pendente'}" data-acao="confirmar">✓</button>
+          <button class="btn-det ${temDet ? 'marcado' : ''}" data-acao="detalhes">⋯</button>
+          <div class="detalhes oculto">
+            <div class="campo"><label>RIR</label>
+              <input type="number" inputmode="numeric" data-campo="rir" value="${r.rir ?? ''}" placeholder="${item.rirMax ?? ''}"></div>
+            <div class="campo"><label>Tipo</label>
+              <select data-campo="tipo">
+                <option value="valida" ${(!r.tipo || r.tipo === 'valida') ? 'selected' : ''}>Válida</option>
+                <option value="aquecimento" ${r.tipo === 'aquecimento' ? 'selected' : ''}>Aquecimento</option>
+                <option value="falha" ${r.tipo === 'falha' ? 'selected' : ''}>Falha</option>
+              </select></div>
+            <div class="campo"><label>Descanso (s)</label>
+              <input type="number" inputmode="numeric" data-campo="descanso" value="${r.descanso ?? ''}" placeholder="—"></div>
+            <div class="campo largo"><label>Observação</label>
+              <input type="text" data-campo="obs" value="${esc(r.obs || '')}" placeholder="opcional"></div>
+          </div>
+        </div>`;
+      }
+
+      h += `<div class="botoes" style="padding:11px 0 4px">
+        <button class="pequeno fantasma" data-acao="trocar" data-uid="${item.uid}">⇄ Trocar exercício</button>
+        ${item.extra
+          ? `<button class="pequeno fantasma" data-acao="rm-extra" data-uid="${item.uid}">Remover</button>`
+          : `<button class="pequeno fantasma" data-acao="pular" data-uid="${item.uid}">Pular</button>`}
+        <button class="pequeno fantasma" data-acao="mais-serie" data-uid="${item.uid}">+ série</button>
       </div>`;
     }
     h += `</div></div>`;
   });
 
-  h += `<div class="card"><div class="campo"><label>Observações do treino</label>
+  h += `<div style="height:6px"></div>
+    <button class="fantasma largo" data-acao="add-extra">+ Acrescentar exercício</button>`;
+
+  h += `<div class="card" style="margin-top:12px"><div class="campo"><label>Observações do treino</label>
     <textarea rows="3" data-campo="obs-sessao" placeholder="opcional">${esc(s.obs || '')}</textarea></div></div>`;
   h += `<div style="height:70px"></div>`;
 
   el.innerHTML = h;
+}
+
+/* modal de escolha de exercício */
+function abrirTroca(u) {
+  const item = itemPorUid(u);
+  if (!item) return;
+  const original = ex(item.ex);
+  const grupos = original.grupos || [];
+  const preferidos = substitutosDe(item.ex).filter(id => id !== item.ex);
+  const mesmoGrupo = estado.exercicios
+    .filter(e => e.id !== item.ex && !preferidos.includes(e.id) && e.grupos.some(g => grupos.includes(g)))
+    .sort((a, b) => a.nome.localeCompare(b.nome));
+  const outros = estado.exercicios
+    .filter(e => e.id !== item.ex && !preferidos.includes(e.id) && !e.grupos.some(g => grupos.includes(g)))
+    .sort((a, b) => a.nome.localeCompare(b.nome));
+
+  const linha = (e) => `<div class="card clicavel" style="padding:11px" data-acao="confirmar-troca" data-uid="${u}" data-ex="${e.id}">
+      <div class="linha-flex"><b style="font-size:14.5px">${esc(e.nome)}</b>
+      <span class="mini">${e.grupos.map(g => GRUPOS[g] ? GRUPOS[g].nome : g).join(', ')}</span></div>
+    </div>`;
+
+  let h = `<h3>Trocar ${esc(original.nome)}</h3>
+    <div class="muted" style="margin-top:-8px">O substituto herda a prescrição e mantém sua própria curva de carga.</div>
+    <div style="height:14px"></div>`;
+  if (preferidos.length) {
+    h += `<h2 style="margin-top:0">Já usou antes</h2>` + preferidos.map(id => linha(ex(id))).join('');
+  }
+  h += `<h2>Mesmo grupo muscular</h2>`;
+  h += mesmoGrupo.length ? mesmoGrupo.map(linha).join('') : `<div class="mini">Nenhum outro exercício deste grupo na biblioteca.</div>`;
+  h += `<h2>Outros exercícios</h2><div class="campo">
+    <select data-acao="troca-outro" data-uid="${u}">
+      <option value="">— escolher —</option>
+      ${outros.map(e => `<option value="${e.id}">${esc(e.nome)}</option>`).join('')}
+    </select></div>`;
+  h += `<div style="height:14px"></div>
+    <button class="fantasma largo" data-acao="fechar-modal">Cancelar</button>`;
+  modal(h);
+}
+
+function abrirExtra() {
+  const lista = estado.exercicios.slice().sort((a, b) => a.nome.localeCompare(b.nome));
+  let h = `<h3>Acrescentar exercício</h3>
+    <div class="muted" style="margin-top:-8px">Entra no fim da sessão, marcado como extra.</div>
+    <div style="height:14px"></div>
+    <div class="campo"><select data-acao="extra-escolhido">
+      <option value="">— escolher —</option>
+      ${lista.map(e => `<option value="${e.id}">${esc(e.nome)}</option>`).join('')}
+    </select></div>
+    <div style="height:14px"></div>
+    <button class="fantasma largo" data-acao="fechar-modal">Cancelar</button>`;
+  modal(h);
 }
 
 function finalizarSessao() {
@@ -421,17 +577,24 @@ function finalizarSessao() {
       <button class="perigo" data-acao="descartar">Descartar</button></div>`);
     return;
   }
-  const f = ficha(s.fichaId);
+  const porUid = {};
+  s.itens.forEach(i => { porUid[i.uid] = i; });
+
   const sessao = {
     id: s.id, data: s.data, fichaId: s.fichaId, academia: s.academia,
     semanaBloco: s.semanaBloco, pesoCorporal: s.pesoCorporal, obs: s.obs,
     duracao: Math.round((Date.now() - s.inicio) / 60000),
-    series: s.series.filter(x => x.carga != null).map(x => {
-      const [i, j] = x.k.split(':').map(Number);
-      const item = f.itens[i];
+    /* o que estava previsto e o que aconteceu com cada item */
+    itens: s.itens.map(i => ({
+      ex: i.ex, series: i.series, pulado: i.pulado, substituido: i.substituido,
+      extra: i.extra, origemEx: i.origem && porUid[i.origem] ? porUid[i.origem].ex : null
+    })),
+    series: validas.map(x => {
+      const [u, j] = x.k.split(':');
+      const item = porUid[u] || {};
       return {
-        ex: item.ex, ordem: i, serie: j,
-        carga: x.carga, reps: x.reps ?? item.repMax,
+        ex: item.ex, itemUid: u, serie: +j,
+        carga: x.carga, reps: x.reps ?? item.repMax ?? null,
         rir: x.rir ?? null, tipo: x.tipo || 'valida',
         descanso: x.descanso ?? null, obs: x.obs || ''
       };
@@ -527,60 +690,247 @@ function editarFicha(id) {
 
 /* ================== tela: histórico ================== */
 
+let filtroFicha = null;
+
+function volumeSessao(s) {
+  return s.series.reduce((a, x) => a + (x.carga || 0) * (x.reps || 0), 0);
+}
+
+/* recordes batidos numa sessão (comparando com tudo que veio antes) */
+function prsDaSessao(s) {
+  if (s.academia !== estado.config.academiaPadrao) return [];
+  const idx = estado.sessoes.findIndex(x => x.id === s.id);
+  const out = [];
+  const porEx = {};
+  s.series.filter(x => x.tipo !== 'aquecimento').forEach(x => {
+    if (!porEx[x.ex] || x.carga > porEx[x.ex]) porEx[x.ex] = x.carga;
+  });
+  Object.entries(porEx).forEach(([exId, carga]) => {
+    const antes = recordeAntes(exId, idx < 0 ? null : idx);
+    if (antes > 0 && carga > antes) out.push({ ex: exId, carga, antes });
+  });
+  return out;
+}
+
+/* sessão anterior da mesma ficha */
+function sessaoAnteriorDa(s) {
+  const lista = sessoesRecentes().filter(x => x.fichaId === s.fichaId);
+  const i = lista.findIndex(x => x.id === s.id);
+  return i >= 0 ? lista[i + 1] || null : null;
+}
+
 function renderHistorico() {
-  const ss = estado.sessoes.slice().sort((a, b) => (a.data < b.data ? 1 : -1));
+  const todas = sessoesRecentes();
+  const ss = filtroFicha ? todas.filter(s => s.fichaId === filtroFicha) : todas;
+
   let h = `<div class="topo"><div><h1>Histórico</h1>
-    <div class="sub">${ss.length} treino${ss.length === 1 ? '' : 's'} registrado${ss.length === 1 ? '' : 's'}</div></div></div>`;
-  if (!ss.length) {
+    <div class="sub">${todas.length} treino${todas.length === 1 ? '' : 's'} registrado${todas.length === 1 ? '' : 's'}</div></div></div>`;
+
+  if (!todas.length) {
     h += `<div class="vazio">Nenhum treino registrado ainda.</div>`;
-  } else {
-    let mesAtual = '';
-    ss.forEach(s => {
-      const mes = s.data.slice(0, 7);
-      if (mes !== mesAtual) {
-        mesAtual = mes;
-        const [a, m] = mes.split('-');
-        h += `<h2>${['','janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'][+m]} ${a}</h2>`;
-      }
-      const f = ficha(s.fichaId);
-      const vol = s.series.reduce((acc, x) => acc + (x.carga || 0) * (x.reps || 0), 0);
-      h += `<div class="card clicavel" data-acao="ver-sessao" data-id="${s.id}">
-        <div class="linha-flex">
-          <div class="col"><b>${esc(f ? f.nome : 'Treino')}</b>
-            <span class="mini">${dataBRLonga(s.data)}${s.academia !== estado.config.academiaPadrao ? ' · ' + esc(s.academia) : ''}</span></div>
-          <div style="text-align:right"><div class="mini">${s.series.length} séries</div>
-            <div class="mini">${Math.round(vol).toLocaleString('pt-BR')} kg vol.</div></div>
-        </div>
-      </div>`;
-    });
+    $('#tela-historico').innerHTML = h;
+    return;
   }
+
+  /* --- resumo --- */
+  const hoje = hojeISO();
+  const ult30 = todas.filter(s => diasEntre(s.data, hoje) <= 30);
+  const volTotal = todas.reduce((a, s) => a + volumeSessao(s), 0);
+  const seriesTotal = todas.reduce((a, s) => a + s.series.length, 0);
+  const comDuracao = todas.filter(s => s.duracao > 0);
+  const duracaoMedia = comDuracao.length
+    ? Math.round(comDuracao.reduce((a, s) => a + s.duracao, 0) / comDuracao.length) : null;
+  const intervalos = [];
+  for (let i = 0; i < todas.length - 1; i++) {
+    const d = diasEntre(todas[i + 1].data, todas[i].data);
+    if (d > 0 && d < 30) intervalos.push(d);
+  }
+  const intervaloMedio = intervalos.length
+    ? (intervalos.reduce((a, b) => a + b, 0) / intervalos.length).toFixed(1).replace('.', ',') : null;
+
+  h += `<div class="card">
+    <div class="resumo">
+      <div><b>${ult30.length}</b><span>treinos em 30 dias</span></div>
+      <div><b>${seriesTotal}</b><span>séries no total</span></div>
+      <div><b>${fmtKg(volTotal)}</b><span>kg de volume</span></div>
+      ${duracaoMedia ? `<div><b>${duracaoMedia} min</b><span>duração média</span></div>` : ''}
+      ${intervaloMedio ? `<div><b>${intervaloMedio} d</b><span>entre treinos</span></div>` : ''}
+      <div><b>${diasDesde(todas[0].data)}</b><span>desde o último</span></div>
+    </div>
+  </div>`;
+
+  /* --- frequência (12 semanas) --- */
+  h += `<h2>Frequência</h2><div class="card">${heatmapHTML(todas)}
+    <div class="mini centro" style="margin-top:8px">últimas 12 semanas</div></div>`;
+
+  /* --- filtro --- */
+  h += `<h2>Treinos</h2>
+    <div class="chips">
+      <button class="${!filtroFicha ? 'ativo' : ''}" data-acao="filtro-ficha" data-id="">Todos</button>
+      ${fichasOrdenadas().map(f =>
+        `<button class="${filtroFicha === f.id ? 'ativo' : ''}" data-acao="filtro-ficha" data-id="${f.id}">${esc(f.nome)}</button>`).join('')}
+    </div>`;
+
+  if (!ss.length) {
+    h += `<div class="vazio">Nenhum treino desta ficha.</div>`;
+  }
+
+  let mesAtual = '';
+  ss.forEach((s, k) => {
+    const mes = s.data.slice(0, 7);
+    if (mes !== mesAtual) {
+      mesAtual = mes;
+      const [a, m] = mes.split('-');
+      h += `<h2>${MESES[+m]} ${a}</h2>`;
+    }
+    const vol = volumeSessao(s);
+    const prs = prsDaSessao(s);
+    const itens = s.itens || [];
+    const pulados = itens.filter(i => i.pulado).length;
+    const trocados = itens.filter(i => i.substituido).length;
+    const extras = itens.filter(i => i.extra).length;
+    const anterior = ss[k + 1] && ss[k + 1].fichaId === s.fichaId ? ss[k + 1] : null;
+    const dVol = anterior ? vol - volumeSessao(anterior) : null;
+
+    h += `<div class="card clicavel" data-acao="ver-sessao" data-id="${s.id}">
+      <div class="linha-flex">
+        <div class="col"><b>${esc(nomeFicha(s.fichaId))}</b>
+          <span class="mini">${dataBRLonga(s.data)}${s.duracao ? ' · ' + s.duracao + ' min' : ''}</span></div>
+        <div style="text-align:right">
+          <div class="mini">${s.series.length} séries</div>
+          <div class="mini">${fmtKg(vol)} kg${dVol != null && Math.abs(dVol) > 1
+            ? ` <span class="${dVol > 0 ? 'delta-pos' : 'delta-neg'}">${dVol > 0 ? '↑' : '↓'}${fmtKg(Math.abs(dVol))}</span>` : ''}</div>
+        </div>
+      </div>
+      ${(prs.length || pulados || trocados || extras || s.academia !== estado.config.academiaPadrao) ? `
+      <div class="selos">
+        ${prs.length ? `<span class="tag verde">${prs.length} recorde${prs.length > 1 ? 's' : ''}</span>` : ''}
+        ${trocados ? `<span class="tag ambar">${trocados} troca${trocados > 1 ? 's' : ''}</span>` : ''}
+        ${pulados ? `<span class="tag">${pulados} pulado${pulados > 1 ? 's' : ''}</span>` : ''}
+        ${extras ? `<span class="tag azul">${extras} extra${extras > 1 ? 's' : ''}</span>` : ''}
+        ${s.academia !== estado.config.academiaPadrao ? `<span class="tag">${esc(s.academia)}</span>` : ''}
+      </div>` : ''}
+    </div>`;
+  });
+
   $('#tela-historico').innerHTML = h;
+}
+
+function heatmapHTML(sessoes) {
+  const porData = {};
+  sessoes.forEach(s => { porData[s.data] = (porData[s.data] || 0) + s.series.length; });
+  const hoje = new Date();
+  const fim = new Date(hoje);
+  fim.setDate(hoje.getDate() + (7 - ((hoje.getDay() + 6) % 7) - 1)); // domingo desta semana
+  const celulas = [];
+  for (let k = 12 * 7 - 1; k >= 0; k--) {
+    const d = new Date(fim);
+    d.setDate(fim.getDate() - k);
+    const key = iso(d);
+    const n = porData[key] || 0;
+    const nivel = n === 0 ? 0 : n < 12 ? 1 : n < 20 ? 2 : 3;
+    const futuro = key > hojeISO();
+    celulas.push(`<i class="n${nivel}${futuro ? ' fut' : ''}" title="${dataBR(key)}${n ? ' · ' + n + ' séries' : ''}"></i>`);
+  }
+  return `<div class="heat">${celulas.join('')}</div>`;
 }
 
 function verSessao(id) {
   const s = estado.sessoes.find(x => x.id === id);
   if (!s) return;
-  const f = ficha(s.fichaId);
-  const porEx = {};
-  s.series.forEach(x => { (porEx[x.ex] = porEx[x.ex] || []).push(x); });
-  let h = `<h3>${esc(f ? f.nome : 'Treino')}</h3>
+  const ant = sessaoAnteriorDa(s);
+  const vol = volumeSessao(s);
+  const prs = prsDaSessao(s);
+  const prsPorEx = {};
+  prs.forEach(p => { prsPorEx[p.ex] = p; });
+
+  /* agrupa séries por item (para separar substituto do original) */
+  const grupos = [];
+  s.series.forEach(x => {
+    const chave = x.itemUid || x.ex;
+    let g = grupos.find(y => y.chave === chave);
+    if (!g) { g = { chave, ex: x.ex, series: [] }; grupos.push(g); }
+    g.series.push(x);
+  });
+
+  let h = `<h3>${esc(nomeFicha(s.fichaId))}</h3>
     <div class="muted" style="margin-top:-8px">${dataBRLonga(s.data)} · ${esc(s.academia)}${s.duracao ? ' · ' + s.duracao + ' min' : ''}${s.pesoCorporal ? ' · ' + fmtNum(s.pesoCorporal) + ' kg' : ''}</div>
-    <div style="height:14px"></div>`;
-  Object.entries(porEx).forEach(([exId, series]) => {
+    <div style="height:12px"></div>`;
+
+  h += `<div class="card"><div class="resumo">
+    <div><b>${s.series.length}</b><span>séries</span></div>
+    <div><b>${fmtKg(vol)}</b><span>kg de volume</span></div>
+    ${ant ? `<div><b>${(() => { const d = vol - volumeSessao(ant); return (d >= 0 ? '+' : '−') + fmtKg(Math.abs(d)); })()}</b><span>vs ${dataBR(ant.data)}</span></div>` : ''}
+    <div><b>S${s.semanaBloco || '—'}</b><span>semana do bloco</span></div>
+  </div></div>`;
+
+  if (prs.length) {
+    h += `<div class="aviso" style="background:var(--acento-esc);color:var(--acento)">
+      <span>★</span><span>Recorde de carga em ${prs.map(p => esc(ex(p.ex).nome) + ' (' + fmtNum(p.carga) + ' kg, antes ' + fmtNum(p.antes) + ')').join('; ')}.</span></div>
+      <div style="height:10px"></div>`;
+  }
+
+  grupos.forEach(g => {
+    const antSer = ant ? ant.series.filter(x => x.ex === g.ex && x.tipo !== 'aquecimento') : [];
+    const maxAnt = antSer.length ? Math.max(...antSer.map(x => x.carga)) : null;
+    const maxAgora = Math.max(...g.series.filter(x => x.tipo !== 'aquecimento').map(x => x.carga));
+    const d = maxAnt != null ? maxAgora - maxAnt : null;
+    const itemInfo = (s.itens || []).find(i => i.ex === g.ex && i.origemEx);
+
     h += `<div class="card" style="padding:11px">
-      <b style="font-size:14.5px">${esc(ex(exId).nome)}</b>
-      <table style="margin-top:6px"><tr><th>#</th><th class="num">Carga</th><th class="num">Reps</th><th class="num">RIR</th><th>Tipo</th></tr>
-      ${series.map((x, k) => `<tr><td>${k + 1}</td><td class="num">${fmtNum(x.carga)}</td><td class="num">${x.reps ?? '—'}</td>
-        <td class="num">${x.rir ?? '—'}</td><td>${x.tipo === 'valida' ? '' : esc(x.tipo)}</td></tr>`).join('')}
+      <div class="linha-flex">
+        <b style="font-size:14.5px">${esc(ex(g.ex).nome)}${prsPorEx[g.ex] ? ' <span class="tag verde">PR</span>' : ''}</b>
+        ${d != null && Math.abs(d) > 0.01
+          ? `<span class="mini ${d > 0 ? 'delta-pos' : 'delta-neg'}">${d > 0 ? '↑' : '↓'} ${fmtNum(Math.abs(d))} kg</span>`
+          : (maxAnt != null ? `<span class="mini">= carga anterior</span>` : `<span class="mini">novo</span>`)}
+      </div>
+      ${itemInfo ? `<div class="mini" style="margin-top:3px">substituiu ${esc(ex(itemInfo.origemEx).nome)}</div>` : ''}
+      <table style="margin-top:6px">
+        <tr><th>#</th><th class="num">Carga</th><th class="num">Reps</th><th class="num">RIR</th><th>Tipo</th></tr>
+        ${g.series.map((x, k) => `<tr>
+          <td>${k + 1}</td>
+          <td class="num"><input class="edit" type="number" inputmode="decimal" step="0.5" value="${x.carga}" data-ed="${s.id}|${g.chave}|${x.serie}|carga"></td>
+          <td class="num"><input class="edit" type="number" inputmode="numeric" value="${x.reps ?? ''}" data-ed="${s.id}|${g.chave}|${x.serie}|reps"></td>
+          <td class="num">${x.rir ?? '—'}</td>
+          <td>${x.tipo === 'valida' ? '' : esc(x.tipo)}</td>
+        </tr>`).join('')}
       </table>
-      ${series.filter(x => x.obs).map(x => `<div class="mini" style="margin-top:6px">${esc(x.obs)}</div>`).join('')}
+      ${g.series.filter(x => x.obs).map(x => `<div class="mini" style="margin-top:6px">${esc(x.obs)}</div>`).join('')}
     </div>`;
   });
+
+  const pulados = (s.itens || []).filter(i => i.pulado);
+  if (pulados.length) {
+    h += `<div class="card"><div class="mini">Não realizados</div>
+      ${pulados.map(i => `<div style="font-size:14px">${esc(ex(i.ex).nome)}</div>`).join('')}</div>`;
+  }
+
   if (s.obs) h += `<div class="card"><div class="mini">Observações</div>${esc(s.obs)}</div>`;
-  h += `<div style="height:10px"></div>
-    <div class="botoes"><button class="fantasma" data-acao="fechar-modal">Fechar</button>
-    <button class="perigo" data-acao="excluir-sessao" data-id="${s.id}">Excluir</button></div>`;
+
+  h += `<div class="mini" style="margin:10px 0 4px">As cargas e reps acima são editáveis — corrija e salve.</div>
+    <div class="botoes">
+      <button class="fantasma" data-acao="fechar-modal">Fechar</button>
+      <button class="primario" data-acao="salvar-sessao" data-id="${s.id}">Salvar</button>
+    </div>
+    <div style="height:10px"></div>
+    <button class="perigo largo" data-acao="excluir-sessao" data-id="${s.id}">Excluir treino</button>`;
   modal(h);
+}
+
+function salvarEdicaoSessao(id) {
+  const s = estado.sessoes.find(x => x.id === id);
+  if (!s) return;
+  $$('#modal [data-ed]').forEach(inp => {
+    const [, chave, serie, campo] = inp.dataset.ed.split('|');
+    const alvo = s.series.find(x => (x.itemUid || x.ex) === chave && x.serie === +serie);
+    if (!alvo) return;
+    const v = num(inp.value);
+    if (v != null) alvo[campo] = v;
+  });
+  salvarJa();
+  fecharModal();
+  toast('Treino atualizado.');
+  render();
 }
 
 /* ================== tela: progressão ================== */
@@ -588,40 +938,51 @@ function verSessao(id) {
 let exSelecionado = null;
 
 function renderProgresso() {
-  const usados = [...new Set(estado.sessoes.flatMap(s => s.series.map(x => x.ex)))];
+  const usados = [...new Set(sessoesRecentes().flatMap(s => s.series.map(x => x.ex)))];
   if (!exSelecionado || !usados.includes(exSelecionado)) exSelecionado = usados[0] || null;
 
   let h = `<div class="topo"><div><h1>Progresso</h1>
     <div class="sub">só a academia habitual entra nos gráficos</div></div></div>`;
 
-  /* volume do ciclo corrente (últimos treinos distintos da sequência) */
-  const doCiclo = seriesDoCiclo();
-  const contagem = {};
+  /* --- volume do ciclo: feito vs previsto --- */
+  const doCiclo = sessoesDoCiclo();
+  const feito = {}, previsto = {};
   doCiclo.forEach(s => {
     s.series.filter(x => x.tipo !== 'aquecimento').forEach(x => {
-      ex(x.ex).grupos.forEach(g => { contagem[g] = (contagem[g] || 0) + 1; });
+      ex(x.ex).grupos.forEach(g => { feito[g] = (feito[g] || 0) + 1; });
+    });
+    const itens = s.itens || (ficha(s.fichaId) ? ficha(s.fichaId).itens : []);
+    itens.filter(i => !i.extra && !i.substituido).forEach(i => {
+      ex(i.ex).grupos.forEach(g => { previsto[g] = (previsto[g] || 0) + (i.series || 0); });
     });
   });
+
   const nFichas = fichasOrdenadas().length;
   h += `<h2>Volume do ciclo</h2>
     <div class="mini" style="margin:-6px 0 8px">${doCiclo.length} de ${nFichas} treinos da sequência${doCiclo.length ? ' · desde ' + dataBR(doCiclo[doCiclo.length - 1].data) : ''}</div>
     <div class="card">`;
-  const grupos = Object.keys(GRUPOS).filter(g => estado.config.alvos[g] > 0 || contagem[g]);
+  const grupos = Object.keys(GRUPOS).filter(g => estado.config.alvos[g] > 0 || feito[g]);
   if (!grupos.length) h += `<div class="mini">Nenhuma série registrada ainda.</div>`;
   grupos.forEach(g => {
-    const feito = contagem[g] || 0;
+    const f = feito[g] || 0;
+    const p = previsto[g] || 0;
     const alvo = estado.config.alvos[g] || 0;
-    const pct = alvo ? Math.min(100, (feito / alvo) * 100) : 0;
-    const cls = !alvo ? '' : (feito < alvo * 0.7 ? 'baixo' : (feito > alvo * 1.2 ? 'alto' : ''));
+    const base = Math.max(alvo, f, p) || 1;
+    const pctF = Math.min(100, (f / base) * 100);
+    const pctP = Math.min(100, (p / base) * 100);
+    const cls = !alvo ? '' : (f < alvo * 0.7 ? 'baixo' : (f > alvo * 1.2 ? 'alto' : ''));
+    const faltou = p - f;
     h += `<div style="margin-bottom:11px">
       <div class="linha-flex"><span style="font-size:14px">${GRUPOS[g].nome}</span>
-        <span class="mini">${feito}${alvo ? ' / ' + alvo : ''}</span></div>
-      <div class="barra-vol"><i class="${cls}" style="width:${pct}%"></i></div>
+        <span class="mini">${f}${alvo ? ' / ' + alvo : ''}${faltou > 0 ? ` <span class="delta-neg">−${faltou}</span>` : ''}</span></div>
+      <div class="barra-vol"><i class="${cls}" style="width:${pctF}%"></i>
+        ${p ? `<u style="left:${pctP}%" title="previsto ${p}"></u>` : ''}</div>
     </div>`;
   });
+  h += `<div class="mini" style="margin-top:4px">A marca clara na barra é o previsto dos treinos já feitos; o número em vermelho é o que ficou faltando por pulo ou troca.</div>`;
   h += `</div>`;
 
-  /* progressão por exercício */
+  /* --- progressão por exercício --- */
   h += `<h2>Carga por exercício</h2>`;
   if (!usados.length) {
     h += `<div class="vazio">Registre alguns treinos para ver a progressão.</div>`;
@@ -634,9 +995,12 @@ function renderProgresso() {
   const pontos = sessoesDe(exSelecionado, true).map(s => {
     const ser = s.series.filter(x => x.ex === exSelecionado && x.tipo !== 'aquecimento' && x.carga != null);
     if (!ser.length) return null;
-    const maxC = Math.max(...ser.map(x => x.carga));
-    const vol = ser.reduce((a, x) => a + x.carga * (x.reps || 0), 0);
-    return { data: s.data, carga: maxC, vol, reps: ser.map(x => x.reps).join('/') };
+    return {
+      data: s.data,
+      carga: Math.max(...ser.map(x => x.carga)),
+      vol: ser.reduce((a, x) => a + x.carga * (x.reps || 0), 0),
+      reps: ser.map(x => x.reps).join('/')
+    };
   }).filter(Boolean).reverse();
 
   h += `<div class="card"><canvas id="grafico"></canvas>
@@ -647,7 +1011,7 @@ function renderProgresso() {
     const volMax = pontos.reduce((a, p) => (p.vol > a.vol ? p : a), pontos[0]);
     h += `<div class="card">
       <div class="linha-flex"><span class="muted">Recorde de carga</span><b>${fmtNum(pr.carga)} kg <span class="mini">(${dataBR(pr.data)})</span></b></div>
-      <div class="linha-flex" style="margin-top:6px"><span class="muted">Maior volume</span><b>${Math.round(volMax.vol).toLocaleString('pt-BR')} kg <span class="mini">(${dataBR(volMax.data)})</span></b></div>
+      <div class="linha-flex" style="margin-top:6px"><span class="muted">Maior volume</span><b>${fmtKg(volMax.vol)} kg <span class="mini">(${dataBR(volMax.data)})</span></b></div>
     </div>`;
     h += `<div class="card"><table>
       <tr><th>Data</th><th class="num">Carga</th><th class="num">Reps</th><th class="num">Volume</th></tr>
@@ -736,7 +1100,7 @@ function renderConfig() {
     <button class="pequeno ${c.registrarPeso ? 'primario' : 'fantasma'}" data-acao="toggle-peso">${c.registrarPeso ? 'ativado' : 'desativado'}</button>
   </div></div>`;
 
-  h += `<h2>Alvo de volume semanal</h2><div class="card">`;
+  h += `<h2>Alvo de volume por ciclo</h2><div class="card">`;
   Object.keys(GRUPOS).forEach(g => {
     h += `<div class="linha-flex" style="padding:5px 0">
       <span style="font-size:14px">${GRUPOS[g].nome}</span>
@@ -744,10 +1108,21 @@ function renderConfig() {
              style="width:70px;text-align:center;background:var(--card-2);border:1px solid var(--linha);border-radius:8px;padding:7px;color:var(--txt)">
     </div>`;
   });
-  h += `<div class="mini" style="margin-top:8px">Séries por semana. Zero esconde o grupo do painel.</div></div>`;
+  h += `<div class="mini" style="margin-top:8px">Séries por ciclo completo (os ${fichasOrdenadas().length} treinos). Zero esconde o grupo do painel.</div></div>`;
+
+  const nSub = Object.keys(estado.substitutos || {}).length;
+  if (nSub) {
+    h += `<h2>Substituições aprendidas</h2><div class="card">`;
+    Object.entries(estado.substitutos).forEach(([exId, lista]) => {
+      h += `<div style="padding:5px 0"><div style="font-size:14px">${esc(ex(exId).nome)}</div>
+        <div class="mini">→ ${lista.map(id => esc(ex(id).nome)).join(' · ')}</div></div>`;
+    });
+    h += `<div style="height:8px"></div>
+      <button class="fantasma largo pequeno" data-acao="limpar-substitutos">Limpar lista</button></div>`;
+  }
 
   h += `<h2>Backup</h2><div class="card">
-    <div class="mini" style="margin-bottom:10px">Os dados ficam só neste aparelho. Se apagar o app ou limpar os dados do Safari, o histórico vai junto — exporte de vez em quando.</div>
+    <div class="mini" style="margin-bottom:10px">Os dados ficam só neste aparelho. Se apagar o app ou limpar os dados do navegador, o histórico vai junto — exporte de vez em quando.</div>
     <div class="botoes">
       <button class="fantasma" data-acao="exportar">Exportar</button>
       <button class="fantasma" data-acao="importar">Importar</button>
@@ -771,6 +1146,7 @@ function modal(html, ctx = {}) {
   ctxModal = ctx;
   $('#modal').innerHTML = html;
   $('#modal-fundo').classList.remove('oculto');
+  $('#modal').scrollTop = 0;
 }
 function fecharModal() {
   $('#modal-fundo').classList.add('oculto');
@@ -790,6 +1166,7 @@ document.addEventListener('click', async (ev) => {
   if (!alvo) return;
 
   const a = alvo.dataset.acao;
+  const u = alvo.dataset.uid;
 
   if (a === 'ir') irPara(alvo.dataset.tela);
   if (a === 'fechar-modal') fecharModal();
@@ -808,41 +1185,68 @@ document.addEventListener('click', async (ev) => {
   if (a === 'continuar') irPara('exec');
 
   if (a === 'abrir') {
-    const i = +alvo.dataset.i;
-    estado.sessaoAtiva.aberto = (estado.sessaoAtiva.aberto === i ? -1 : i);
+    estado.sessaoAtiva.aberto = (estado.sessaoAtiva.aberto === u ? null : u);
     salvar(); renderExec();
   }
 
   if (a === 'confirmar') {
     const linha = alvo.closest('.serie');
-    const i = +linha.dataset.i, j = +linha.dataset.j;
+    const uu = linha.dataset.uid, j = +linha.dataset.j;
     const inpCarga = linha.querySelector('[data-campo="carga"]');
     const inpReps = linha.querySelector('[data-campo="reps"]');
     let carga = num(inpCarga.value);
     if (carga == null && inpCarga.dataset.sug) carga = num(inpCarga.dataset.sug);
     if (carga == null) { inpCarga.focus(); toast('Informe a carga.'); return; }
-    const f = ficha(estado.sessaoAtiva.fichaId);
-    const reps = num(inpReps.value) ?? f.itens[i].repMax;
-    gravaSerie(i, j, { carga, reps });
+    const item = itemPorUid(uu) || {};
+    const reps = num(inpReps.value) ?? item.repMax ?? null;
+    gravaSerie(uu, j, { carga, reps });
     inpCarga.blur(); inpReps.blur();
     renderExec();
     return;
   }
 
   if (a === 'detalhes') {
-    const linha = alvo.closest('.serie');
-    linha.querySelector('.detalhes').classList.toggle('oculto');
+    alvo.closest('.serie').querySelector('.detalhes').classList.toggle('oculto');
+    return;
+  }
+
+  if (a === 'trocar') { abrirTroca(u); return; }
+  if (a === 'confirmar-troca') { substituirItem(u, alvo.dataset.ex); return; }
+  if (a === 'add-extra') { abrirExtra(); return; }
+
+  if (a === 'pular') {
+    const item = itemPorUid(u);
+    if (item) { item.pulado = true; estado.sessaoAtiva.aberto = null; await salvarJa(); renderExec(); }
+    return;
+  }
+  if (a === 'despular') {
+    const item = itemPorUid(u);
+    if (item) { item.pulado = false; await salvarJa(); renderExec(); }
+    return;
+  }
+  if (a === 'mais-serie') {
+    const item = itemPorUid(u);
+    if (item) { item.series += 1; await salvarJa(); renderExec(); }
+    return;
+  }
+  if (a === 'rm-extra') {
+    const s = estado.sessaoAtiva;
+    s.itens = s.itens.filter(i => i.uid !== u);
+    s.series = s.series.filter(x => !x.k.startsWith(u + ':'));
+    await salvarJa(); renderExec();
     return;
   }
 
   if (a === 'ver-sessao') verSessao(alvo.dataset.id);
+  if (a === 'salvar-sessao') { salvarEdicaoSessao(alvo.dataset.id); return; }
   if (a === 'excluir-sessao') {
     estado.sessoes = estado.sessoes.filter(s => s.id !== alvo.dataset.id);
-    await salvarJa(); fecharModal(); toast('Sessão excluída.'); render();
+    await salvarJa(); fecharModal(); toast('Treino excluído.'); render();
   }
   if (a === 'descartar') {
     estado.sessaoAtiva = null; await salvarJa(); fecharModal(); toast('Treino descartado.'); irPara('inicio');
   }
+  if (a === 'filtro-ficha') { filtroFicha = alvo.dataset.id || null; renderHistorico(); return; }
 
   if (a === 'editar-ficha') editarFicha(alvo.dataset.id);
   if (a === 'rm-item') {
@@ -852,8 +1256,7 @@ document.addEventListener('click', async (ev) => {
     salvar(); editarFicha(f.id);
   }
   if (a === 'salvar-ficha') {
-    const f = ficha(alvo.dataset.id);
-    lerFormFicha(f);
+    lerFormFicha(ficha(alvo.dataset.id));
     await salvarJa(); fecharModal(); toast('Ficha salva.'); render();
   }
   if (a === 'excluir-ficha') {
@@ -873,6 +1276,7 @@ document.addEventListener('click', async (ev) => {
   if (a === 'sel-ex') { exSelecionado = alvo.dataset.id; renderProgresso(); }
 
   if (a === 'toggle-peso') { estado.config.registrarPeso = !estado.config.registrarPeso; await salvarJa(); render(); }
+  if (a === 'limpar-substitutos') { estado.substitutos = {}; await salvarJa(); toast('Lista limpa.'); render(); }
   if (a === 'reiniciar-bloco') {
     const hoje = new Date(); const seg = new Date(hoje);
     seg.setDate(hoje.getDate() - ((hoje.getDay() + 6) % 7));
@@ -893,6 +1297,7 @@ document.addEventListener('click', async (ev) => {
 });
 
 function lerFormFicha(f) {
+  if (!f) return;
   const m = $('#modal');
   const g = (k) => { const el = m.querySelector(`[data-f="${k}"]`); return el ? el.value : null; };
   if (g('nome') != null) f.nome = g('nome');
@@ -920,6 +1325,8 @@ document.addEventListener('change', async (ev) => {
     await salvarJa(); editarFicha(f.id);
     return;
   }
+  if (t.dataset.acao === 'troca-outro' && t.value) { substituirItem(t.dataset.uid, t.value); return; }
+  if (t.dataset.acao === 'extra-escolhido' && t.value) { acrescentarExtra(t.value); return; }
 
   if (t.dataset.campo === 'academia') { estado.sessaoAtiva.academia = t.value; salvar(); renderExec(); return; }
   if (t.dataset.campo === 'peso')     { estado.sessaoAtiva.pesoCorporal = num(t.value); salvar(); return; }
@@ -927,11 +1334,11 @@ document.addEventListener('change', async (ev) => {
 
   if (t.dataset.campo && t.closest('.serie')) {
     const linha = t.closest('.serie');
-    const i = +linha.dataset.i, j = +linha.dataset.j;
+    const uu = linha.dataset.uid, j = +linha.dataset.j;
     const c = t.dataset.campo;
     const v = (c === 'tipo' || c === 'obs') ? t.value : num(t.value);
     if ((c === 'carga' || c === 'reps') && v == null) return;
-    gravaSerie(i, j, { [c]: v });
+    gravaSerie(uu, j, { [c]: v });
     if (c === 'carga') renderExec();
     return;
   }

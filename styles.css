@@ -180,10 +180,49 @@ nav button.ativo { color: var(--acento); }
 
 canvas { width: 100%; height: 190px; display: block; }
 
-.barra-vol { height: 8px; border-radius: 999px; background: var(--card-2); overflow: hidden; margin-top: 6px; }
+.barra-vol { height: 8px; border-radius: 999px; background: var(--card-2);
+             margin-top: 6px; position: relative; overflow: hidden; }
 .barra-vol i { display: block; height: 100%; border-radius: 999px; background: var(--acento); }
 .barra-vol i.baixo { background: var(--azul); }
 .barra-vol i.alto  { background: var(--alerta); }
+.barra-vol u { position: absolute; top: -2px; bottom: -2px; width: 2px;
+               background: var(--txt-2); opacity: .85; }
+
+/* ---------- histórico ---------- */
+
+.resumo { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 8px; }
+.resumo > div { display: flex; flex-direction: column; gap: 1px; }
+.resumo b { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+.resumo span { font-size: 11px; color: var(--txt-3); line-height: 1.25; }
+
+.selos { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+
+.delta-pos { color: var(--acento); }
+.delta-neg { color: var(--perigo); }
+
+.heat { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 1fr);
+        gap: 3px; justify-content: space-between; }
+.heat i { display: block; width: 100%; aspect-ratio: 1; min-height: 9px;
+          border-radius: 3px; background: var(--card-2); }
+.heat i.n1 { background: #1c5c33; }
+.heat i.n2 { background: #2f9b52; }
+.heat i.n3 { background: var(--acento); }
+.heat i.fut { opacity: .35; }
+
+.hist-mini { padding: 2px 0 6px; }
+.hist-mini > div { display: flex; justify-content: space-between; gap: 10px;
+                   font-size: 12.5px; color: var(--txt-3); padding: 2px 0; }
+.hist-mini > div b { color: var(--txt-2); font-weight: 600; }
+.hist-mini > div.recente b { color: var(--txt); }
+
+input.edit {
+  width: 62px; background: var(--card-2); border: 1px solid var(--linha);
+  border-radius: 7px; padding: 6px; color: var(--txt); font-size: 14px;
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+input.edit:focus { outline: none; border-color: var(--acento); }
+
+.ex-bloco.derivado { margin-left: 12px; border-left: 2px solid var(--alerta); }
 
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 td, th { padding: 7px 4px; text-align: left; border-bottom: 1px solid var(--linha); }
