@@ -68,8 +68,8 @@ function estadoInicial() {
     seedVersao: SEED_VERSAO,
     config: {
       incremento: 2.5,
-      academiaPadrao: 'Cimerian',
-      academias: ['Cimerian', 'Outra'],
+      academias: [{ id: 'cimerian', nome: 'Cimerian' }],
+      academiaId: 'cimerian',
       registrarPeso: true,
       blocoInicio: iso(seg),
       alvos: Object.fromEntries(Object.entries(GRUPOS).map(([k, v]) => [k, v.alvo]))
@@ -101,6 +101,8 @@ async function carregarEstado() {
     if (!estado.reintroducao) estado.reintroducao = base.reintroducao;
     if (!estado.substitutos) estado.substitutos = {};
 
+    migrarAcademias(estado);
+
     /* sessão em andamento no formato antigo (sem itens próprios) não é recuperável */
     if (estado.sessaoAtiva && !Array.isArray(estado.sessaoAtiva.itens)) {
       estado.sessaoAtiva = null;
@@ -113,7 +115,8 @@ async function carregarEstado() {
       const statusReintro = {};
       (estado.reintroducao || []).forEach(r => { statusReintro[r.nome] = r.status; });
 
-      estado.exercicios = JSON.parse(JSON.stringify(EXERCICIOS));
+      const meus = (estado.exercicios || []).filter(e => e.custom);
+      estado.exercicios = JSON.parse(JSON.stringify(EXERCICIOS)).concat(meus);
       estado.fichas = JSON.parse(JSON.stringify(FICHAS));
       estado.config.alvos = Object.fromEntries(Object.entries(GRUPOS).map(([k, v]) => [k, v.alvo]));
       estado.reintroducao = JSON.parse(JSON.stringify(REINTRODUCAO))
@@ -130,6 +133,48 @@ async function carregarEstado() {
     await salvar();
   }
   return estado;
+}
+
+/* Academias passaram a ser objetos {id, nome} com histórico próprio.
+   Converte o formato antigo (lista de nomes) sem perder nenhuma sessão. */
+function slugAcademia(nome) {
+  const base = String(nome || 'academia').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24);
+  return base || 'academia';
+}
+
+function migrarAcademias(st) {
+  const c = st.config;
+  if (!Array.isArray(c.academias)) c.academias = [];
+
+  if (c.academias.length && typeof c.academias[0] === 'string') {
+    c.academias = c.academias.map(nome => ({ id: slugAcademia(nome), nome }));
+  }
+  if (!c.academias.length) c.academias = [{ id: 'cimerian', nome: 'Cimerian' }];
+
+  /* academiaPadrao guardava o nome; agora guardamos o id */
+  if (!c.academiaId) {
+    const porNome = c.academias.find(a => a.nome === c.academiaPadrao);
+    c.academiaId = porNome ? porNome.id : c.academias[0].id;
+  }
+  delete c.academiaPadrao;
+
+  const idDe = (nome) => {
+    const achou = c.academias.find(a => a.nome === nome);
+    if (achou) return achou.id;
+    const nova = { id: slugAcademia(nome), nome };
+    if (c.academias.some(a => a.id === nova.id)) nova.id += '-' + Math.random().toString(36).slice(2, 5);
+    c.academias.push(nova);
+    return nova.id;
+  };
+
+  (st.sessoes || []).forEach(s => {
+    if (!s.academiaId) s.academiaId = s.academia ? idDe(s.academia) : c.academiaId;
+  });
+  if (st.sessaoAtiva && !st.sessaoAtiva.academiaId) {
+    st.sessaoAtiva.academiaId = st.sessaoAtiva.academia ? idDe(st.sessaoAtiva.academia) : c.academiaId;
+  }
 }
 
 let _timer = null;

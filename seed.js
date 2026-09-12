@@ -4,6 +4,11 @@
 
 const SEED_VERSAO = 2;
 
+/* Versão do app, mostrada em Ajustes. Serve para você conferir, olhando o
+   celular, se a atualização realmente chegou. Aumente a cada publicação
+   (junto com o ?v= no index.html e o CACHE no sw.js). */
+const APP_VERSAO = '4.0';
+
 /* Alvos por CICLO completo (os 5 treinos), não por semana de calendário. */
 const GRUPOS = {
   peito:        { nome: 'Peito',              alvo: 15 },

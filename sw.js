@@ -1,14 +1,14 @@
 /* Service worker: deixa o app abrir sem internet.
    Ao subir uma versão nova dos arquivos, mude o número do CACHE abaixo. */
 
-const CACHE = 'treino-v3';
+const CACHE = 'treino-v4.0';
 const ARQUIVOS = [
   './',
   'index.html',
-  'styles.css',
-  'seed.js',
-  'db.js',
-  'app.js',
+  'styles.css?v=4.0',
+  'seed.js?v=4.0',
+  'db.js?v=4.0',
+  'app.js?v=4.0',
   'manifest.webmanifest',
   'icon-192.png',
   'icon-512.png'
@@ -42,6 +42,8 @@ self.addEventListener('fetch', (ev) => {
         caches.open(CACHE).then(c => c.put(ev.request, copia)).catch(() => {});
         return resp;
       })
-      .catch(() => caches.match(ev.request).then(r => r || caches.match('index.html')))
+      .catch(() => caches.match(ev.request)
+        .then(r => r || caches.match(ev.request, { ignoreSearch: true }))
+        .then(r => r || caches.match('index.html')))
   );
 });

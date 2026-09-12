@@ -43,6 +43,17 @@ function toast(msg) {
 }
 
 function ex(id) { return estado.exercicios.find(e => e.id === id) || { id, nome: id, grupos: [] }; }
+
+/* ---------- academias ---------- */
+/* Cada academia tem histórico, sugestão de carga e recordes próprios:
+   máquinas diferentes não são comparáveis entre si. */
+function academias() { return estado.config.academias || []; }
+function academia(id) { return academias().find(a => a.id === id) || { id, nome: '—' }; }
+function nomeAcademia(id) { return academia(id).nome; }
+/* academia de referência: a do treino em andamento, senão a principal */
+function academiaRef() {
+  return (estado.sessaoAtiva && estado.sessaoAtiva.academiaId) || estado.config.academiaId;
+}
 function ficha(id) { return estado.fichas.find(f => f.id === id); }
 function nomeFicha(id) { const f = ficha(id); return f ? f.nome : 'Treino'; }
 
@@ -121,30 +132,28 @@ function textoPresc(item) {
 
 /* ================== histórico por exercício ================== */
 
-function sessoesDe(exId, soHabitual = true) {
-  const hab = estado.config.academiaPadrao;
+function sessoesDe(exId, acadId = academiaRef()) {
   return sessoesRecentes()
-    .filter(s => (!soHabitual || s.academia === hab) && s.series.some(x => x.ex === exId && x.carga != null));
+    .filter(s => (!acadId || s.academiaId === acadId) && s.series.some(x => x.ex === exId && x.carga != null));
 }
 
-/* as N últimas vezes que este exercício apareceu */
-function ultimasVezes(exId, n = 3) {
-  return sessoesDe(exId, true).slice(0, n).map(s => ({
+/* as N últimas vezes que este exercício apareceu NESTA academia */
+function ultimasVezes(exId, n = 3, acadId = academiaRef()) {
+  return sessoesDe(exId, acadId).slice(0, n).map(s => ({
     data: s.data,
     series: s.series.filter(x => x.ex === exId && x.carga != null && x.tipo !== 'aquecimento')
   })).filter(u => u.series.length);
 }
 
-function ultimaVez(exId) { return ultimasVezes(exId, 1)[0] || null; }
+function ultimaVez(exId, acadId = academiaRef()) { return ultimasVezes(exId, 1, acadId)[0] || null; }
 
 /* maior carga registrada antes de uma dada sessão.
    Usa a ordem de registro, não a data: dois treinos no mesmo dia contam certo. */
-function recordeAntes(exId, indiceLimite) {
-  const hab = estado.config.academiaPadrao;
+function recordeAntes(exId, indiceLimite, acadId = academiaRef()) {
   let max = 0;
   estado.sessoes.forEach((s, i) => {
     if (indiceLimite != null && i >= indiceLimite) return;
-    if (s.academia !== hab) return;
+    if (acadId && s.academiaId !== acadId) return;
     s.series.forEach(x => {
       if (x.ex === exId && x.tipo !== 'aquecimento' && x.carga > max) max = x.carga;
     });
@@ -153,8 +162,8 @@ function recordeAntes(exId, indiceLimite) {
 }
 
 /* sugestão de progressão dupla */
-function sugestao(item) {
-  const u = ultimaVez(item.ex);
+function sugestao(item, acadId = academiaRef()) {
+  const u = ultimaVez(item.ex, acadId);
   if (!u) return null;
   const validas = u.series.filter(x => x.tipo !== 'aquecimento');
   if (!validas.length) return null;
@@ -298,7 +307,7 @@ function iniciarSessao(fichaId) {
     id: uid(),
     data: hojeISO(),
     fichaId,
-    academia: estado.config.academiaPadrao,
+    academiaId: estado.config.academiaId,
     semanaBloco: sem,
     inicio: Date.now(),
     pesoCorporal: null,
@@ -362,6 +371,22 @@ function substituirItem(u, exNovo) {
   toast('Substituído por ' + ex(exNovo).nome + '.');
 }
 
+/* Cria um exercício que não existe na biblioteca, a partir do nome digitado.
+   Na troca, herda os grupos musculares do exercício que está substituindo —
+   assim a contagem de volume continua certa sem você precisar classificar nada. */
+function criarExercicio(nome, grupos) {
+  nome = String(nome || '').trim();
+  if (!nome) return null;
+  const igual = estado.exercicios.find(e => e.nome.toLowerCase() === nome.toLowerCase());
+  if (igual) return igual.id;
+  const base = nome.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'ex';
+  let id = base;
+  while (estado.exercicios.some(e => e.id === id)) id = base + '-' + Math.random().toString(36).slice(2, 5);
+  estado.exercicios.push({ id, nome, grupos: (grupos || []).slice(), custom: true });
+  return id;
+}
+
 function acrescentarExtra(exNovo) {
   const s = estado.sessaoAtiva;
   const novo = {
@@ -398,13 +423,13 @@ function renderExec() {
     <div class="detalhes" style="padding:0">
       <div class="campo"><label>Academia</label>
         <select data-campo="academia">
-          ${estado.config.academias.map(a => `<option ${a === s.academia ? 'selected' : ''}>${esc(a)}</option>`).join('')}
+          ${academias().map(a => `<option value="${a.id}" ${a.id === s.academiaId ? 'selected' : ''}>${esc(a.nome)}</option>`).join('')}
         </select></div>
       ${estado.config.registrarPeso ? `<div class="campo"><label>Peso (kg)</label>
         <input type="number" inputmode="decimal" data-campo="peso" value="${s.pesoCorporal ?? ''}" placeholder="—"></div>` : ''}
     </div>
-    ${s.academia !== estado.config.academiaPadrao
-      ? `<div class="aviso"><span>!</span><span>Fora da academia habitual: estas cargas não entram nos gráficos de progressão.</span></div>` : ''}
+    ${s.academiaId !== estado.config.academiaId
+      ? `<div class="aviso"><span>!</span><span>As cargas sugeridas e o histórico abaixo são os desta academia — ${esc(nomeAcademia(s.academiaId))}.</span></div>` : ''}
   </div>`;
 
   if (f && f.nota) h += `<div class="aviso"><span>›</span><span>${esc(f.nota)}</span></div><div style="height:10px"></div>`;
@@ -414,7 +439,7 @@ function renderExec() {
     const feitas = seriesFeitas(item.uid).length;
     const completo = feitas >= item.series;
     const aberto = s.aberto === item.uid;
-    const sug = sugestao(item);
+    const sug = sugestao(item, s.academiaId);
     const unSeg = e.unidade === 'seg';
     const inativo = item.pulado || item.substituido;
 
@@ -444,16 +469,16 @@ function renderExec() {
       if (e.nota) h += `<div class="ult-vez" style="padding-bottom:0">${esc(e.nota)}</div>`;
       if (item.excecao) h += `<div class="ult-vez" style="padding-bottom:0">(*) Reps altas por motivo articular — não subir carga além da faixa.</div>`;
 
-      const hist = ultimasVezes(item.ex, 3);
+      const hist = ultimasVezes(item.ex, 3, s.academiaId);
       if (hist.length) {
-        h += `<div class="ult-vez">Últimas vezes:</div><div class="hist-mini">`;
+        h += `<div class="ult-vez">Últimas vezes${academias().length > 1 ? ' em ' + esc(nomeAcademia(s.academiaId)) : ''}:</div><div class="hist-mini">`;
         hist.forEach((u, k) => {
           const desc = u.series.map(x => fmtNum(x.carga) + (x.reps != null ? '×' + x.reps : '')).join(' · ');
           h += `<div class="${k === 0 ? 'recente' : ''}"><span>${dataBR(u.data)}</span><b>${desc}</b></div>`;
         });
         h += `</div>`;
       } else {
-        h += `<div class="ult-vez">Primeiro registro deste exercício.</div>`;
+        h += `<div class="ult-vez">Primeira vez deste exercício${academias().length > 1 ? ' em ' + esc(nomeAcademia(s.academiaId)) : ''}.</div>`;
       }
 
       if (sug && sug.tipo === 'subir' && !item.excecao) {
@@ -547,7 +572,16 @@ function abrirTroca(u) {
       <option value="">— escolher —</option>
       ${outros.map(e => `<option value="${e.id}">${esc(e.nome)}</option>`).join('')}
     </select></div>`;
-  h += `<div style="height:14px"></div>
+
+  h += `<h2>Não está na lista</h2>
+    <div class="card" style="padding:12px">
+      <div class="campo"><label>Nome do exercício</label>
+        <input id="novo-ex-nome" type="text" placeholder="ex.: supino convergente Hammer" autocapitalize="sentences"></div>
+      <div class="mini" style="margin:8px 0 10px">Entra como ${esc(grupos.map(g => GRUPOS[g] ? GRUPOS[g].nome.toLowerCase() : g).join(', ') || 'sem grupo muscular')} e fica salvo na sua biblioteca.</div>
+      <button class="primario largo pequeno" data-acao="criar-e-trocar" data-uid="${u}">Criar e usar agora</button>
+    </div>`;
+
+  h += `<div style="height:10px"></div>
     <button class="fantasma largo" data-acao="fechar-modal">Cancelar</button>`;
   modal(h);
 }
@@ -561,7 +595,21 @@ function abrirExtra() {
       <option value="">— escolher —</option>
       ${lista.map(e => `<option value="${e.id}">${esc(e.nome)}</option>`).join('')}
     </select></div>
-    <div style="height:14px"></div>
+
+    <h2>Não está na lista</h2>
+    <div class="card" style="padding:12px">
+      <div class="campo"><label>Nome do exercício</label>
+        <input id="novo-ex-nome" type="text" placeholder="ex.: crucifixo Hammer" autocapitalize="sentences"></div>
+      <div class="campo" style="margin-top:8px"><label>Grupo muscular</label>
+        <select id="novo-ex-grupo">
+          <option value="">— sem grupo (não conta no volume) —</option>
+          ${Object.entries(GRUPOS).map(([g, i]) => `<option value="${g}">${esc(i.nome)}</option>`).join('')}
+        </select></div>
+      <div style="height:10px"></div>
+      <button class="primario largo pequeno" data-acao="criar-e-acrescentar">Criar e acrescentar</button>
+    </div>
+
+    <div style="height:10px"></div>
     <button class="fantasma largo" data-acao="fechar-modal">Cancelar</button>`;
   modal(h);
 }
@@ -581,7 +629,8 @@ function finalizarSessao() {
   s.itens.forEach(i => { porUid[i.uid] = i; });
 
   const sessao = {
-    id: s.id, data: s.data, fichaId: s.fichaId, academia: s.academia,
+    id: s.id, data: s.data, fichaId: s.fichaId,
+    academiaId: s.academiaId, academia: nomeAcademia(s.academiaId),
     semanaBloco: s.semanaBloco, pesoCorporal: s.pesoCorporal, obs: s.obs,
     duracao: Math.round((Date.now() - s.inicio) / 60000),
     /* o que estava previsto e o que aconteceu com cada item */
@@ -698,7 +747,6 @@ function volumeSessao(s) {
 
 /* recordes batidos numa sessão (comparando com tudo que veio antes) */
 function prsDaSessao(s) {
-  if (s.academia !== estado.config.academiaPadrao) return [];
   const idx = estado.sessoes.findIndex(x => x.id === s.id);
   const out = [];
   const porEx = {};
@@ -706,7 +754,7 @@ function prsDaSessao(s) {
     if (!porEx[x.ex] || x.carga > porEx[x.ex]) porEx[x.ex] = x.carga;
   });
   Object.entries(porEx).forEach(([exId, carga]) => {
-    const antes = recordeAntes(exId, idx < 0 ? null : idx);
+    const antes = recordeAntes(exId, idx < 0 ? null : idx, s.academiaId);
     if (antes > 0 && carga > antes) out.push({ ex: exId, carga, antes });
   });
   return out;
@@ -802,13 +850,13 @@ function renderHistorico() {
             ? ` <span class="${dVol > 0 ? 'delta-pos' : 'delta-neg'}">${dVol > 0 ? '↑' : '↓'}${fmtKg(Math.abs(dVol))}</span>` : ''}</div>
         </div>
       </div>
-      ${(prs.length || pulados || trocados || extras || s.academia !== estado.config.academiaPadrao) ? `
+      ${(prs.length || pulados || trocados || extras || s.academiaId !== estado.config.academiaId) ? `
       <div class="selos">
         ${prs.length ? `<span class="tag verde">${prs.length} recorde${prs.length > 1 ? 's' : ''}</span>` : ''}
         ${trocados ? `<span class="tag ambar">${trocados} troca${trocados > 1 ? 's' : ''}</span>` : ''}
         ${pulados ? `<span class="tag">${pulados} pulado${pulados > 1 ? 's' : ''}</span>` : ''}
         ${extras ? `<span class="tag azul">${extras} extra${extras > 1 ? 's' : ''}</span>` : ''}
-        ${s.academia !== estado.config.academiaPadrao ? `<span class="tag">${esc(s.academia)}</span>` : ''}
+        ${s.academiaId !== estado.config.academiaId ? `<span class="tag">${esc(nomeAcademia(s.academiaId))}</span>` : ''}
       </div>` : ''}
     </div>`;
   });
@@ -854,7 +902,7 @@ function verSessao(id) {
   });
 
   let h = `<h3>${esc(nomeFicha(s.fichaId))}</h3>
-    <div class="muted" style="margin-top:-8px">${dataBRLonga(s.data)} · ${esc(s.academia)}${s.duracao ? ' · ' + s.duracao + ' min' : ''}${s.pesoCorporal ? ' · ' + fmtNum(s.pesoCorporal) + ' kg' : ''}</div>
+    <div class="muted" style="margin-top:-8px">${dataBRLonga(s.data)} · ${esc(nomeAcademia(s.academiaId))}${s.duracao ? ' · ' + s.duracao + ' min' : ''}${s.pesoCorporal ? ' · ' + fmtNum(s.pesoCorporal) + ' kg' : ''}</div>
     <div style="height:12px"></div>`;
 
   h += `<div class="card"><div class="resumo">
@@ -936,13 +984,23 @@ function salvarEdicaoSessao(id) {
 /* ================== tela: progressão ================== */
 
 let exSelecionado = null;
+let acadSelecionada = null;
 
 function renderProgresso() {
-  const usados = [...new Set(sessoesRecentes().flatMap(s => s.series.map(x => x.ex)))];
+  if (!acadSelecionada || !academias().some(a => a.id === acadSelecionada)) {
+    acadSelecionada = estado.config.academiaId;
+  }
+  const daAcad = sessoesRecentes().filter(s => s.academiaId === acadSelecionada);
+  const usados = [...new Set(daAcad.flatMap(s => s.series.map(x => x.ex)))];
   if (!exSelecionado || !usados.includes(exSelecionado)) exSelecionado = usados[0] || null;
 
   let h = `<div class="topo"><div><h1>Progresso</h1>
-    <div class="sub">só a academia habitual entra nos gráficos</div></div></div>`;
+    <div class="sub">cada academia tem sua própria curva de carga</div></div></div>`;
+
+  if (academias().length > 1) {
+    h += `<div class="chips">${academias().map(a =>
+      `<button class="${a.id === acadSelecionada ? 'ativo' : ''}" data-acao="sel-acad" data-id="${a.id}">${esc(a.nome)}</button>`).join('')}</div>`;
+  }
 
   /* --- volume do ciclo: feito vs previsto --- */
   const doCiclo = sessoesDoCiclo();
@@ -985,14 +1043,14 @@ function renderProgresso() {
   /* --- progressão por exercício --- */
   h += `<h2>Carga por exercício</h2>`;
   if (!usados.length) {
-    h += `<div class="vazio">Registre alguns treinos para ver a progressão.</div>`;
+    h += `<div class="vazio">Nenhum treino registrado${academias().length > 1 ? ' em ' + esc(nomeAcademia(acadSelecionada)) : ''} ainda.</div>`;
     $('#tela-progresso').innerHTML = h;
     return;
   }
   h += `<div class="chips">${usados.map(id =>
     `<button class="${id === exSelecionado ? 'ativo' : ''}" data-acao="sel-ex" data-id="${id}">${esc(ex(id).nome)}</button>`).join('')}</div>`;
 
-  const pontos = sessoesDe(exSelecionado, true).map(s => {
+  const pontos = sessoesDe(exSelecionado, acadSelecionada).map(s => {
     const ser = s.series.filter(x => x.ex === exSelecionado && x.tipo !== 'aquecimento' && x.carga != null);
     if (!ser.length) return null;
     return {
@@ -1033,8 +1091,15 @@ function desenharGrafico(pontos) {
   const g = c.getContext('2d');
   g.scale(dpr, dpr);
   g.clearRect(0, 0, w, hh);
+  /* cores vindas do tema em uso */
+  const cs = getComputedStyle(document.documentElement);
+  const cor = (n, alt) => (cs.getPropertyValue(n) || '').trim() || alt;
+  const COR_ACENTO = cor('--acento', '#4ade80');
+  const COR_LINHA = cor('--linha', '#2a2f3a');
+  const COR_TXT3 = cor('--txt-3', '#6b7280');
+  const COR_AREA = cor('--acento-rgb', '74,222,128');
   if (pontos.length < 1) {
-    g.fillStyle = '#6b7280'; g.font = '13px -apple-system, sans-serif'; g.textAlign = 'center';
+    g.fillStyle = COR_TXT3; g.font = '13px -apple-system, sans-serif'; g.textAlign = 'center';
     g.fillText('Sem dados suficientes', w / 2, hh / 2);
     return;
   }
@@ -1047,8 +1112,8 @@ function desenharGrafico(pontos) {
   const X = (i) => pad.l + (pontos.length === 1 ? (w - pad.l - pad.r) / 2 : i * (w - pad.l - pad.r) / (pontos.length - 1));
   const Y = (v) => pad.t + (1 - (v - min) / (max - min)) * (hh - pad.t - pad.b);
 
-  g.strokeStyle = '#2a2f3a'; g.lineWidth = 1;
-  g.fillStyle = '#6b7280'; g.font = '10px -apple-system, sans-serif'; g.textAlign = 'right';
+  g.strokeStyle = COR_LINHA; g.lineWidth = 1;
+  g.fillStyle = COR_TXT3; g.font = '10px -apple-system, sans-serif'; g.textAlign = 'right';
   for (let k = 0; k <= 3; k++) {
     const v = min + (max - min) * k / 3, y = Y(v);
     g.beginPath(); g.moveTo(pad.l, y); g.lineTo(w - pad.r, y); g.stroke();
@@ -1057,19 +1122,19 @@ function desenharGrafico(pontos) {
 
   g.beginPath();
   pontos.forEach((p, i) => { i ? g.lineTo(X(i), Y(p.carga)) : g.moveTo(X(i), Y(p.carga)); });
-  g.strokeStyle = '#4ade80'; g.lineWidth = 2.2; g.lineJoin = 'round'; g.stroke();
+  g.strokeStyle = COR_ACENTO; g.lineWidth = 2.2; g.lineJoin = 'round'; g.stroke();
 
   g.lineTo(X(pontos.length - 1), hh - pad.b); g.lineTo(X(0), hh - pad.b); g.closePath();
   const grad = g.createLinearGradient(0, pad.t, 0, hh - pad.b);
-  grad.addColorStop(0, 'rgba(74,222,128,.22)'); grad.addColorStop(1, 'rgba(74,222,128,0)');
+  grad.addColorStop(0, `rgba(${COR_AREA},.22)`); grad.addColorStop(1, `rgba(${COR_AREA},0)`);
   g.fillStyle = grad; g.fill();
 
   pontos.forEach((p, i) => {
     g.beginPath(); g.arc(X(i), Y(p.carga), 3.2, 0, Math.PI * 2);
-    g.fillStyle = '#4ade80'; g.fill();
+    g.fillStyle = COR_ACENTO; g.fill();
   });
 
-  g.fillStyle = '#6b7280'; g.textAlign = 'center'; g.font = '10px -apple-system, sans-serif';
+  g.fillStyle = COR_TXT3; g.textAlign = 'center'; g.font = '10px -apple-system, sans-serif';
   const passo = Math.max(1, Math.ceil(pontos.length / 6));
   pontos.forEach((p, i) => { if (i % passo === 0 || i === pontos.length - 1) g.fillText(dataBR(p.data), X(i), hh - 8); });
 }
@@ -1083,16 +1148,38 @@ function renderConfig() {
 
   h += `<h2>Treino</h2><div class="card">
     <div class="detalhes" style="grid-template-columns:1fr 1fr;padding:0">
-      <div class="campo"><label>Incremento de carga (kg)</label>
+      <div class="campo largo"><label>Incremento de carga (kg)</label>
         <input type="number" inputmode="decimal" step="0.5" data-cfg="incremento" value="${c.incremento}"></div>
-      <div class="campo"><label>Academia habitual</label>
-        <input data-cfg="academiaPadrao" value="${esc(c.academiaPadrao)}"></div>
       <div class="campo largo"><label>Início do bloco de 8 semanas</label>
         <input type="date" data-cfg="blocoInicio" value="${c.blocoInicio}"></div>
     </div>
     <div class="mini" style="margin-top:8px">Você está na semana ${sem} de 8${sem === 7 ? ' (deload)' : sem === 8 ? ' (reavaliação)' : ''}.</div>
     <div style="height:10px"></div>
-    <button class="fantasma largo" data-acao="reiniciar-bloco">Reiniciar bloco a partir desta segunda</button>
+    <button class="fantasma largo" data-acao="reiniciar-bloco">Reiniciar bloco nesta segunda</button>
+  </div>`;
+
+  h += `<h2>Academias</h2>
+    <div class="mini" style="margin:-6px 0 8px">Cada academia guarda as próprias cargas. As máquinas mudam de uma para outra, então a progressão de uma nunca entra na conta da outra.</div>
+    <div class="card">`;
+  academias().forEach(a => {
+    const nSess = estado.sessoes.filter(x => x.academiaId === a.id).length;
+    const principal = a.id === c.academiaId;
+    h += `<div style="padding:7px 0;border-bottom:1px solid var(--linha)">
+      <div class="linha-flex">
+        <input data-acad="${a.id}" value="${esc(a.nome)}"
+               style="flex:1;min-width:0;background:var(--card-2);border:1px solid var(--linha);border-radius:8px;padding:9px;color:var(--txt);font-size:15px">
+        ${principal ? '<span class="tag verde">principal</span>'
+                    : `<button class="pequeno fantasma" data-acao="acad-principal" data-id="${a.id}">tornar principal</button>`}
+      </div>
+      <div class="linha-flex" style="margin-top:5px">
+        <span class="mini">${nSess} treino${nSess === 1 ? '' : 's'} registrado${nSess === 1 ? '' : 's'}</span>
+        ${(!principal && !nSess) ? `<button class="pequeno perigo" data-acao="acad-remover" data-id="${a.id}">remover</button>` : ''}
+      </div>
+    </div>`;
+  });
+  h += `<div style="height:10px"></div>
+    <button class="fantasma largo pequeno" data-acao="acad-nova">+ Adicionar academia</button>
+    <div class="mini" style="margin-top:8px">O nome é editável: toque, corrija e o histórico acompanha. Só dá para remover uma academia sem treinos registrados.</div>
   </div>`;
 
   h += `<div class="card"><div class="linha-flex">
@@ -1109,6 +1196,23 @@ function renderConfig() {
     </div>`;
   });
   h += `<div class="mini" style="margin-top:8px">Séries por ciclo completo (os ${fichasOrdenadas().length} treinos). Zero esconde o grupo do painel.</div></div>`;
+
+  const meus = estado.exercicios.filter(e => e.custom);
+  if (meus.length) {
+    h += `<h2>Exercícios que você criou</h2><div class="card">`;
+    meus.forEach(e => {
+      const usado = estado.sessoes.some(x => x.series.some(y => y.ex === e.id));
+      h += `<div style="padding:7px 0;border-bottom:1px solid var(--linha)">
+        <div class="linha-flex">
+          <input data-meuex="${e.id}" value="${esc(e.nome)}"
+                 style="flex:1;min-width:0;background:var(--card-2);border:1px solid var(--linha);border-radius:8px;padding:9px;color:var(--txt);font-size:15px">
+          ${usado ? '' : `<button class="pequeno perigo" data-acao="ex-remover" data-id="${e.id}">remover</button>`}
+        </div>
+        <div class="mini" style="margin-top:4px">${e.grupos.map(g => GRUPOS[g] ? GRUPOS[g].nome : g).join(', ') || 'sem grupo muscular'}</div>
+      </div>`;
+    });
+    h += `<div class="mini" style="margin-top:8px">Aparecem na lista de troca e na edição das fichas como qualquer outro.</div></div>`;
+  }
 
   const nSub = Object.keys(estado.substitutos || {}).length;
   if (nSub) {
@@ -1134,7 +1238,13 @@ function renderConfig() {
     <button class="perigo largo" data-acao="apagar-tudo">Apagar todos os dados</button>
   </div>`;
 
-  h += `<div class="mini centro" style="margin-top:22px">Treino · uso pessoal · dados locais</div>`;
+  h += `<h2>Versão</h2><div class="card">
+    <div class="linha-flex"><span>Versão instalada</span><b>${APP_VERSAO}</b></div>
+    <div class="mini" style="margin:8px 0 10px">Se você acabou de publicar uma versão nova e este número não mudou, toque abaixo para buscar do servidor.</div>
+    <button class="fantasma largo" data-acao="buscar-atualizacao">Buscar atualização</button>
+  </div>`;
+
+  h += `<div class="mini centro" style="margin-top:22px">Treino ${APP_VERSAO} · uso pessoal · dados locais</div>`;
 
   $('#tela-config').innerHTML = h;
 }
@@ -1210,6 +1320,26 @@ document.addEventListener('click', async (ev) => {
     return;
   }
 
+  if (a === 'criar-e-trocar') {
+    const item = itemPorUid(u);
+    const nome = ($('#novo-ex-nome') || {}).value;
+    if (!nome || !nome.trim()) { toast('Escreva o nome do exercício.'); return; }
+    const novoId = criarExercicio(nome, item ? ex(item.ex).grupos : []);
+    if (!novoId) { toast('Não deu para criar.'); return; }
+    await salvarJa();
+    substituirItem(u, novoId);
+    return;
+  }
+  if (a === 'criar-e-acrescentar') {
+    const nome = ($('#novo-ex-nome') || {}).value;
+    const grupo = ($('#novo-ex-grupo') || {}).value;
+    if (!nome || !nome.trim()) { toast('Escreva o nome do exercício.'); return; }
+    const novoId = criarExercicio(nome, grupo ? [grupo] : []);
+    if (!novoId) { toast('Não deu para criar.'); return; }
+    await salvarJa();
+    acrescentarExtra(novoId);
+    return;
+  }
   if (a === 'trocar') { abrirTroca(u); return; }
   if (a === 'confirmar-troca') { substituirItem(u, alvo.dataset.ex); return; }
   if (a === 'add-extra') { abrirExtra(); return; }
@@ -1275,6 +1405,54 @@ document.addEventListener('click', async (ev) => {
 
   if (a === 'sel-ex') { exSelecionado = alvo.dataset.id; renderProgresso(); }
 
+  if (a === 'acad-nova') {
+    modal(`<h3>Nova academia</h3>
+      <div class="muted" style="margin-top:-8px">Ela começa sem histórico: as cargas da primeira ida você digita, e a partir daí o app acompanha a progressão separadamente.</div>
+      <div style="height:14px"></div>
+      <div class="campo"><label>Nome</label>
+        <input id="nova-acad" type="text" placeholder="ex.: Smart Fit Centro" autocapitalize="words"></div>
+      <div style="height:14px"></div>
+      <div class="botoes">
+        <button class="fantasma" data-acao="fechar-modal">Cancelar</button>
+        <button class="primario" data-acao="acad-criar">Adicionar</button>
+      </div>`);
+    setTimeout(() => { const el = $('#nova-acad'); if (el) el.focus(); }, 120);
+    return;
+  }
+  if (a === 'acad-criar') {
+    const nome = (($('#nova-acad') || {}).value || '').trim();
+    if (!nome) { toast('Escreva o nome.'); return; }
+    if (academias().some(x => x.nome.toLowerCase() === nome.toLowerCase())) {
+      toast('Já existe uma academia com esse nome.'); return;
+    }
+    let id = slugAcademia(nome);
+    while (academias().some(x => x.id === id)) id += '-' + Math.random().toString(36).slice(2, 4);
+    estado.config.academias.push({ id, nome });
+    await salvarJa(); fecharModal(); toast(nome + ' adicionada.'); render();
+    return;
+  }
+  if (a === 'acad-principal') {
+    estado.config.academiaId = alvo.dataset.id;
+    await salvarJa(); toast(nomeAcademia(alvo.dataset.id) + ' é a principal.'); render();
+    return;
+  }
+  if (a === 'acad-remover') {
+    const id = alvo.dataset.id;
+    if (estado.sessoes.some(x => x.academiaId === id)) { toast('Tem treinos registrados nela.'); return; }
+    estado.config.academias = academias().filter(x => x.id !== id);
+    await salvarJa(); toast('Academia removida.'); render();
+    return;
+  }
+  if (a === 'ex-remover') {
+    const id = alvo.dataset.id;
+    if (estado.sessoes.some(x => x.series.some(y => y.ex === id))) { toast('Esse exercício já tem séries registradas.'); return; }
+    estado.exercicios = estado.exercicios.filter(e => e.id !== id);
+    estado.fichas.forEach(f => { f.itens = f.itens.filter(i => i.ex !== id); });
+    await salvarJa(); toast('Exercício removido.'); render();
+    return;
+  }
+  if (a === 'sel-acad') { acadSelecionada = alvo.dataset.id; renderProgresso(); return; }
+
   if (a === 'toggle-peso') { estado.config.registrarPeso = !estado.config.registrarPeso; await salvarJa(); render(); }
   if (a === 'limpar-substitutos') { estado.substitutos = {}; await salvarJa(); toast('Lista limpa.'); render(); }
   if (a === 'reiniciar-bloco') {
@@ -1282,6 +1460,21 @@ document.addEventListener('click', async (ev) => {
     seg.setDate(hoje.getDate() - ((hoje.getDay() + 6) % 7));
     estado.config.blocoInicio = iso(seg);
     await salvarJa(); toast('Bloco reiniciado na semana 1.'); render();
+  }
+  if (a === 'buscar-atualizacao') {
+    toast('Procurando...');
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.update()));
+      }
+      if (window.caches) {
+        const chaves = await caches.keys();
+        await Promise.all(chaves.map(k => caches.delete(k)));
+      }
+    } catch (e) { /* segue mesmo assim */ }
+    location.replace(location.pathname + '?r=' + Date.now());
+    return;
   }
   if (a === 'exportar') exportarJSON();
   if (a === 'importar') $('#arquivo').click();
@@ -1328,7 +1521,7 @@ document.addEventListener('change', async (ev) => {
   if (t.dataset.acao === 'troca-outro' && t.value) { substituirItem(t.dataset.uid, t.value); return; }
   if (t.dataset.acao === 'extra-escolhido' && t.value) { acrescentarExtra(t.value); return; }
 
-  if (t.dataset.campo === 'academia') { estado.sessaoAtiva.academia = t.value; salvar(); renderExec(); return; }
+  if (t.dataset.campo === 'academia') { estado.sessaoAtiva.academiaId = t.value; salvar(); renderExec(); return; }
   if (t.dataset.campo === 'peso')     { estado.sessaoAtiva.pesoCorporal = num(t.value); salvar(); return; }
   if (t.dataset.campo === 'obs-sessao') { estado.sessaoAtiva.obs = t.value; salvar(); return; }
 
@@ -1346,13 +1539,25 @@ document.addEventListener('change', async (ev) => {
   if (t.dataset.cfg) {
     const c = t.dataset.cfg;
     estado.config[c] = (c === 'incremento') ? (num(t.value) || 2.5) : t.value;
-    if (c === 'academiaPadrao' && !estado.config.academias.includes(t.value)) {
-      estado.config.academias = [t.value, 'Outra'];
-    }
     await salvarJa(); toast('Salvo.');
     return;
   }
   if (t.dataset.alvo) { estado.config.alvos[t.dataset.alvo] = num(t.value) || 0; await salvarJa(); return; }
+
+  if (t.dataset.acad) {
+    const nome = (t.value || '').trim();
+    const a = academias().find(x => x.id === t.dataset.acad);
+    if (a && nome) { a.nome = nome; await salvarJa(); toast('Renomeada.'); render(); }
+    else { render(); }
+    return;
+  }
+  if (t.dataset.meuex) {
+    const nome = (t.value || '').trim();
+    const e = estado.exercicios.find(x => x.id === t.dataset.meuex);
+    if (e && nome) { e.nome = nome; await salvarJa(); toast('Renomeado.'); render(); }
+    else { render(); }
+    return;
+  }
 
   if (t.id === 'arquivo' && t.files[0]) {
     try {
@@ -1371,6 +1576,13 @@ window.addEventListener('resize', () => { if (telaAtual === 'progresso') renderP
   await carregarEstado();
   irPara(estado.sessaoAtiva ? 'exec' : 'inicio');
   if ('serviceWorker' in navigator) {
-    try { await navigator.serviceWorker.register('sw.js'); } catch (e) { /* ok sem offline */ }
+    try {
+      const reg = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' });
+      /* procura versão nova a cada abertura e quando o app volta do fundo */
+      reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) reg.update().catch(() => {});
+      });
+    } catch (e) { /* ok sem offline */ }
   }
 })();
